@@ -1,0 +1,32 @@
+[theme]
+base = "dark"
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#e2e8f0"
+```
+
+4. Click **Commit new file**
+
+---
+
+**Step 5 — Deploy on Streamlit Cloud**
+
+1. Go to `share.streamlit.io`
+2. Sign in with GitHub
+3. Click **New app**
+4. Select repository: `rffpla-dashboard`
+5. Main file path: `app.py`
+6. Click **Deploy**
+
+Wait 3–5 minutes — you'll get a permanent URL!
+
+---
+
+**Your repo should look like this when done:**
+```
+rffpla-dashboard/
+    app.py                  ← uploaded from PC
+    requirements.txt        ← created in GitHub
+    RFFPLA_classifier.h5    ← uploaded from PC
+    .streamlit/
+        config.toml         ← created in GitHub
