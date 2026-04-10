@@ -1,0 +1,12 @@
+name: rffpla
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=1.26.4
+  - matplotlib=3.9.2
+  - pip
+  - pip:
+      - streamlit==1.37.0
+      - ai-edge-litert>=1.0.1

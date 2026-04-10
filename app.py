@@ -1,63 +1,174 @@
+import os
+import datetime
 import streamlit as st
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import os
+import pandas as pd
+import plotly.graph_objects as go
 
-MODEL_PATH     = "RFFPLA_classifier.tflite"
-SAMPLE_RATE    = 2_000_000
-WINDOW_LEN     = 1024
-THRESHOLD      = 0.03
-GUARD          = 50
-MIN_LEN        = 80
-MAX_BURSTS     = 20
-CONF_THRESHOLD = 70.0
+from config import THRESHOLD, WINDOW_SIZE, SAMPLE_RATE, CENTER_FREQ, MODEL_PATH
 
+GUARD      = 50
+MIN_LEN    = 80
+MAX_BURSTS = 20
+
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="RF-PLA System",
-    page_icon="📡",
+    page_icon="🛡",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded",
 )
 
+# ── CSS (single block) ────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    #MainMenu, footer, header { visibility: hidden; }
-    .block-container { padding: 2rem 3rem 1rem 3rem; }
-    .sys-title { font-size:22px; font-weight:600; color:#f1f5f9; letter-spacing:0.3px; margin:0; }
-    .sys-sub { font-size:13px; color:#64748b; margin:2px 0 0 0; }
-    .section-label { font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#475569; margin-bottom:10px; }
-    .card { background:#1e293b; border:1px solid #334155; border-radius:10px; padding:20px; }
-    .stat-row { display:flex; justify-content:space-between; align-items:center; padding:7px 0; border-bottom:1px solid #2d3f55; font-size:13px; }
-    .stat-row:last-child { border:none; }
-    .stat-label { color:#64748b; }
-    .stat-value { color:#e2e8f0; font-weight:500; }
-    .stat-accent { color:#34d399; font-weight:600; }
-    .result-auth { background:#052e16; border:1.5px solid #16a34a; border-radius:10px; padding:24px 28px; }
-    .result-deny { background:#2d0a0a; border:1.5px solid #dc2626; border-radius:10px; padding:24px 28px; }
-    .result-warn { background:#1c1400; border:1.5px solid #d97706; border-radius:10px; padding:24px 28px; }
-    .result-idle { background:#0f172a; border:1.5px dashed #334155; border-radius:10px; padding:40px 28px; text-align:center; }
-    .result-title-auth { font-size:20px; font-weight:700; color:#4ade80; margin:0 0 4px 0; }
-    .result-title-deny { font-size:20px; font-weight:700; color:#f87171; margin:0 0 4px 0; }
-    .result-title-warn { font-size:20px; font-weight:700; color:#fbbf24; margin:0 0 4px 0; }
-    .result-sub { font-size:13px; color:#94a3b8; margin:0 0 14px 0; }
-    .conf-badge-auth { display:inline-block; background:#14532d; color:#4ade80; font-size:22px; font-weight:700; padding:6px 18px; border-radius:6px; }
-    .conf-badge-deny { display:inline-block; background:#450a0a; color:#f87171; font-size:22px; font-weight:700; padding:6px 18px; border-radius:6px; }
-    .conf-badge-warn { display:inline-block; background:#1c1400; color:#fbbf24; font-size:22px; font-weight:700; padding:6px 18px; border-radius:6px; }
-    .meta-row { display:flex; gap:20px; margin-top:14px; flex-wrap:wrap; }
-    .meta-item { font-size:12px; color:#64748b; }
-    .meta-item span { color:#94a3b8; font-weight:500; }
-    .divider { border:none; border-top:1px solid #1e293b; margin:20px 0; }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Outfit:wght@400;600;700&display=swap');
+
+html, body, [class*="css"] { font-family: 'Outfit', sans-serif; }
+
+[data-testid="stMetricValue"] { font-family: 'IBM Plex Mono', monospace !important; }
+
+.conf-num {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 48px;
+    font-weight: 600;
+    line-height: 1;
+    margin: 8px 0 12px;
+}
+
+.card-pass { background:#0F3D2E; border:1.5px solid #1D9E75; border-radius:12px; padding:24px; margin-bottom:8px; }
+.card-fail { background:#3D1A0C; border:1.5px solid #D85A30; border-radius:12px; padding:24px; margin-bottom:8px; }
+.card-warn { background:#1c1400; border:1.5px solid #d97706;  border-radius:12px; padding:24px; margin-bottom:8px; }
+.card-idle { background:#0f172a; border:1.5px dashed #334155; border-radius:12px; padding:40px 28px; text-align:center; }
+
+.verdict { font-family:'Outfit',sans-serif; font-size:12px; letter-spacing:0.1em; text-transform:uppercase; font-weight:600; margin-bottom:6px; }
+.c-pass  { color:#1D9E75; }
+.c-fail  { color:#D85A30; }
+.c-warn  { color:#d97706; }
+
+.meta   { display:flex; gap:16px; margin-top:12px; flex-wrap:wrap; font-size:12px; color:#64748b; }
+.meta .v { color:#94a3b8; font-weight:500; }
+
+.stTabs [data-baseweb="tab-highlight"] { background-color:#1D9E75 !important; }
+.stTabs [aria-selected="true"]         { color:#1D9E75 !important; }
+
+.sec { font-size:11px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:#475569; margin-bottom:8px; }
+
+.pill-ok  { display:inline-block; background:#0F3D2E; color:#1D9E75; font-size:11px; padding:3px 10px; border-radius:99px; font-weight:600; }
+.pill-err { display:inline-block; background:#3D1A0C; color:#D85A30; font-size:11px; padding:3px 10px; border-radius:99px; font-weight:600; }
+.tag      { display:inline-block; background:#1e293b; color:#94a3b8; font-size:11px; padding:3px 10px; border-radius:99px; border:1px solid #334155; margin-left:6px; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Plotly chart helpers ──────────────────────────────────────────────────────
+_LAYOUT = dict(
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="Outfit", size=12),
+    margin=dict(l=40, r=20, t=30, b=40),
+    template="plotly_dark",
+)
+_GRID = dict(gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.08)")
 
+
+def _fig(title=""):
+    f = go.Figure()
+    f.update_layout(
+        **_LAYOUT,
+        title=dict(text=title, font=dict(family="Outfit", size=13), x=0),
+        xaxis=dict(**_GRID),
+        yaxis=dict(**_GRID),
+    )
+    return f
+
+
+def chart_amp(burst, is_auth, title="Amplitude envelope", name="Signal"):
+    t   = np.arange(len(burst)) / SAMPLE_RATE * 1e6
+    amp = np.abs(burst)
+    c   = "#1D9E75" if is_auth else "#D85A30"
+    fc  = "rgba(29,158,117,0.10)" if is_auth else "rgba(216,90,48,0.10)"
+    f   = _fig(title)
+    f.add_trace(go.Scatter(
+        x=t, y=amp, mode="lines", name=name,
+        line=dict(color=c, width=2),
+        fill="tozeroy", fillcolor=fc,
+        hovertemplate="%{x:.2f} \u00b5s<br>Amp: %{y:.4f}<extra></extra>",
+    ))
+    f.update_layout(xaxis_title="Time (\u00b5s)", yaxis_title="Amplitude")
+    return f
+
+
+def chart_iq(burst, title="I / Q channels"):
+    t = np.arange(len(burst)) / SAMPLE_RATE * 1e6
+    f = _fig(title)
+    f.add_trace(go.Scatter(
+        x=t, y=burst.real, mode="lines", name="I",
+        line=dict(color="#1D9E75", width=2),
+        hovertemplate="%{x:.2f} \u00b5s<br>I: %{y:.4f}<extra></extra>",
+    ))
+    f.add_trace(go.Scatter(
+        x=t, y=burst.imag, mode="lines", name="Q",
+        line=dict(color="#D85A30", width=2),
+        hovertemplate="%{x:.2f} \u00b5s<br>Q: %{y:.4f}<extra></extra>",
+    ))
+    f.update_layout(
+        xaxis_title="Time (\u00b5s)", yaxis_title="Amplitude",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return f
+
+
+def chart_conf(probs, threshold_pct):
+    n  = len(probs)
+    cf = [(1 - p) * 100 if p < 0.5 else p * 100 for p in probs]
+    cs = ["#1D9E75" if p < 0.5 else "#D85A30" for p in probs]
+    f  = _fig(f"Per-burst confidence  (n={n})")
+    f.add_trace(go.Bar(
+        x=list(range(n)), y=cf, marker_color=cs, opacity=0.85,
+        hovertemplate="Burst %{x}<br>Confidence: %{y:.1f}%<extra></extra>",
+        name="Confidence",
+    ))
+    f.add_hline(
+        y=threshold_pct, line_dash="dash", line_color="#f59e0b",
+        annotation_text=f"{threshold_pct:.0f}% threshold",
+        annotation_position="top right",
+    )
+    f.update_layout(xaxis_title="Burst index", yaxis_title="Confidence %", yaxis_range=[0, 108])
+    return f
+
+
+def chart_overlay(burst_a, burst_b):
+    ta = np.arange(len(burst_a)) / SAMPLE_RATE * 1e6
+    tb = np.arange(len(burst_b)) / SAMPLE_RATE * 1e6
+    f  = _fig("Amplitude envelope \u2014 Signal A vs Signal B")
+    f.add_trace(go.Scatter(
+        x=ta, y=np.abs(burst_a), mode="lines", name="Signal A",
+        line=dict(color="#1D9E75", width=2),
+        hovertemplate="%{x:.2f} \u00b5s<br>Amp: %{y:.4f}<extra></extra>",
+    ))
+    f.add_trace(go.Scatter(
+        x=tb, y=np.abs(burst_b), mode="lines", name="Signal B",
+        line=dict(color="#D85A30", width=2),
+        hovertemplate="%{x:.2f} \u00b5s<br>Amp: %{y:.4f}<extra></extra>",
+    ))
+    f.update_layout(
+        xaxis_title="Time (\u00b5s)", yaxis_title="Normalised amplitude",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return f
+
+
+# ── Model & signal processing (logic unchanged) ───────────────────────────────
 @st.cache_resource
 def load_model():
+    if not os.path.exists(MODEL_PATH):
+        return None, (
+            f"Model file not found at {MODEL_PATH}. "
+            "Check that RFFPLA_classifier.tflite is in the models/ folder."
+        )
     try:
-        import tflite_runtime.interpreter as tflite
-        interpreter = tflite.Interpreter(model_path=MODEL_PATH)
+        from ai_edge_litert.interpreter import Interpreter
+        interpreter = Interpreter(model_path=MODEL_PATH)
         interpreter.allocate_tensors()
         return interpreter, None
     except Exception as e:
@@ -85,8 +196,8 @@ def extract_all_bursts(raw_bytes):
         pk = np.max(np.abs(b))
         if pk > 0:
             b = b / pk
-        b = b[:WINDOW_LEN] if len(b) >= WINDOW_LEN else np.concatenate(
-            [b, np.zeros(WINDOW_LEN - len(b), dtype=np.complex64)])
+        b = b[:WINDOW_SIZE] if len(b) >= WINDOW_SIZE else np.concatenate(
+            [b, np.zeros(WINDOW_SIZE - len(b), dtype=np.complex64)])
         arrays.append(np.stack([b.real, b.imag], axis=-1).astype(np.float32))
         bursts.append(b)
     return arrays, bursts
@@ -99,9 +210,9 @@ def predict(arrays, model):
     probs = []
     for arr in arrays:
         inp = arr[np.newaxis, :, :].astype(np.float32)
-        interpreter.set_tensor(input_details[0]['index'], inp)
+        interpreter.set_tensor(input_details[0]["index"], inp)
         interpreter.invoke()
-        p = float(interpreter.get_tensor(output_details[0]['index'])[0][0])
+        p = float(interpreter.get_tensor(output_details[0]["index"])[0][0])
         probs.append(p)
     probs   = np.array(probs)
     avg     = float(np.mean(probs))
@@ -111,228 +222,426 @@ def predict(arrays, model):
     return is_auth, conf, probs, std
 
 
-def make_plot(bursts, probs, is_auth):
-    c_main = "#22c55e" if is_auth else "#ef4444"
-    b  = bursts[0]
-    t  = np.arange(len(b)) / SAMPLE_RATE * 1e6
-    am = np.abs(b)
-    fig, axes = plt.subplots(1, 3, figsize=(15, 2.8))
-    fig.patch.set_facecolor("#0f172a")
-    for ax in axes:
-        ax.set_facecolor("#1e293b")
-        for sp in ax.spines.values():
-            sp.set_edgecolor("#334155")
-            sp.set_linewidth(0.5)
-        ax.tick_params(colors="#64748b", labelsize=8)
-        ax.xaxis.label.set_color("#64748b")
-        ax.yaxis.label.set_color("#64748b")
-    axes[0].plot(t, am, color=c_main, lw=1.2)
-    axes[0].fill_between(t, am, alpha=0.15, color=c_main)
-    axes[0].set_title("Amplitude envelope", color="#94a3b8", fontsize=9, pad=6)
-    axes[0].set_xlabel("Time (us)", fontsize=8)
-    axes[0].set_ylabel("Amplitude", fontsize=8)
-    axes[1].plot(t, b.real, color="#3b82f6", lw=0.9, label="I", alpha=0.9)
-    axes[1].plot(t, b.imag, color="#22c55e", lw=0.9, label="Q", alpha=0.9)
-    axes[1].set_title("I / Q channels", color="#94a3b8", fontsize=9, pad=6)
-    axes[1].set_xlabel("Time (us)", fontsize=8)
-    axes[1].legend(fontsize=8, facecolor="#1e293b",
-                   edgecolor="#334155", labelcolor="#94a3b8")
-    n  = len(probs)
-    cs = ["#22c55e" if p < 0.5 else "#ef4444" for p in probs]
-    cf = [(1 - p) * 100 if p < 0.5 else p * 100 for p in probs]
-    axes[2].bar(range(n), cf, color=cs, alpha=0.85, width=0.6)
-    axes[2].axhline(y=CONF_THRESHOLD, color="#f59e0b", lw=1,
-                    linestyle="--", label=f"{CONF_THRESHOLD}% threshold")
-    axes[2].set_title(f"Per-burst confidence  (n={n})",
-                      color="#94a3b8", fontsize=9, pad=6)
-    axes[2].set_xlabel("Burst index", fontsize=8)
-    axes[2].set_ylabel("Confidence %", fontsize=8)
-    axes[2].set_ylim(0, 108)
-    axes[2].legend(fontsize=8, facecolor="#1e293b",
-                   edgecolor="#334155", labelcolor="#94a3b8")
-    plt.tight_layout(pad=1.2)
-    return fig
+# ── Session state ─────────────────────────────────────────────────────────────
+if "session_log" not in st.session_state:
+    st.session_state.session_log = []
 
+# ── Load model (global — both tabs need it) ───────────────────────────────────
+model, model_err = load_model()
+model_ok = model is not None
 
-# ── Page ──
-st.markdown("""
-<p class="sys-title">📡 RF Physical Layer Authentication System</p>
-<p class="sys-sub">Compares incoming RF signals against enrolled device fingerprint
-using a 1D Convolutional Neural Network</p>
-""", unsafe_allow_html=True)
-st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-
-model, err = load_model()
-if err:
-    st.error(f"Model failed to load — {err}")
-    st.stop()
-
-left, right = st.columns([1, 1.6], gap="large")
-
-with left:
-    st.markdown('<p class="section-label">Enrolled Device</p>',
-                unsafe_allow_html=True)
-    st.markdown("""
-    <div class="card">
-        <div class="stat-row">
-            <span class="stat-label">Device</span>
-            <span class="stat-value">CC1101 + ESP32</span>
-        </div>
-        <div class="stat-row">
-            <span class="stat-label">Modulation</span>
-            <span class="stat-value">FSK — 433.92 MHz</span>
-        </div>
-        <div class="stat-row">
-            <span class="stat-label">Sample rate</span>
-            <span class="stat-value">2,000,000 sps</span>
-        </div>
-        <div class="stat-row">
-            <span class="stat-label">Classifier</span>
-            <span class="stat-value">1D CNN · 44,577 params</span>
-        </div>
-        <div class="stat-row">
-            <span class="stat-label">Test accuracy</span>
-            <span class="stat-accent">99.69%</span>
-        </div>
-        <div class="stat-row">
-            <span class="stat-label">Rogue recall</span>
-            <span class="stat-accent">100.00%</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<p class="section-label">Upload Signal</p>',
-                unsafe_allow_html=True)
-    uploaded = st.file_uploader(
-        "GNU Radio .c64 capture file",
-        type=["c64"],
-        label_visibility="collapsed"
-    )
-    st.markdown(
-        '<p style="font-size:12px;color:#475569;margin-top:6px">'
-        '5 to 12 second recording recommended · Max 200 MB</p>',
-        unsafe_allow_html=True
-    )
-
-with right:
-    st.markdown('<p class="section-label">Authentication Result</p>',
-                unsafe_allow_html=True)
-
-    if uploaded is None:
-        st.markdown("""
-        <div class="result-idle">
-            <p style="font-size:32px;margin:0 0 8px 0">📡</p>
-            <p style="color:#475569;font-size:15px;margin:0 0 4px 0;font-weight:500">
-                Awaiting signal input
-            </p>
-            <p style="color:#334155;font-size:13px;margin:0">
-                Upload a .c64 capture file to begin
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        with st.spinner("Analysing signal..."):
-            raw            = uploaded.read()
-            arrays, bursts = extract_all_bursts(raw)
-
-        if not arrays:
-            st.markdown("""
-            <div class="result-warn">
-                <p class="result-title-warn">No Signal Found</p>
-                <p class="result-sub">No valid bursts detected.
-                Ensure the device was transmitting during recording.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            is_auth, conf, probs, std = predict(arrays, model)
-            n   = len(arrays)
-            dur = len(raw) / (SAMPLE_RATE * 8)
-
-            if conf < CONF_THRESHOLD:
-                st.markdown(f"""
-                <div class="result-warn">
-                    <p class="result-title-warn">Low Confidence</p>
-                    <p class="result-sub">System could not make a reliable decision.
-                    Try re-recording closer to the receiver.</p>
-                    <span class="conf-badge-warn">{conf:.1f}% confidence</span>
-                    <div class="meta-row">
-                        <span class="meta-item">Bursts: <span>{n}</span></span>
-                        <span class="meta-item">Duration: <span>~{dur:.1f}s</span></span>
-                        <span class="meta-item">Std dev: <span>{std*100:.1f}%</span></span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            elif is_auth:
-                st.markdown(f"""
-                <div class="result-auth">
-                    <p class="result-title-auth">Device Authenticated</p>
-                    <p class="result-sub">Signal fingerprint matches enrolled device</p>
-                    <span class="conf-badge-auth">{conf:.1f}% confidence</span>
-                    <div class="meta-row">
-                        <span class="meta-item">Enrolled: <span>CC1101+ESP32 FSK</span></span>
-                        <span class="meta-item">Bursts: <span>{n}</span></span>
-                        <span class="meta-item">Duration: <span>~{dur:.1f}s</span></span>
-                        <span class="meta-item">Std dev: <span>{std*100:.1f}%</span></span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                <div class="result-deny">
-                    <p class="result-title-deny">Unknown Device Detected</p>
-                    <p class="result-sub">Signal does not match enrolled device
-                    fingerprint — access denied</p>
-                    <span class="conf-badge-deny">{conf:.1f}% confidence</span>
-                    <div class="meta-row">
-                        <span class="meta-item">Bursts: <span>{n}</span></span>
-                        <span class="meta-item">Duration: <span>~{dur:.1f}s</span></span>
-                        <span class="meta-item">Std dev: <span>{std*100:.1f}%</span></span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown('<p class="section-label">Signal Fingerprint Analysis</p>',
-                        unsafe_allow_html=True)
-            fig = make_plot(bursts, probs, is_auth)
-            st.pyplot(fig)
-            plt.close()
-
-            with st.expander("Technical details"):
-                active = int(np.sum(np.abs(bursts[0]) > 0.01))
-                st.markdown(f"""
-| | |
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### Enrolled Device")
+    st.markdown(f"""
+| Parameter | Value |
 |---|---|
-| File | {uploaded.name} |
-| Size | {len(raw)/1e6:.1f} MB |
-| Duration | ~{dur:.1f} seconds |
-| Bursts extracted | {n} |
-| Active samples | {active} ({active/SAMPLE_RATE*1e6:.1f} us) |
-| Individual scores | {", ".join([f"{p:.3f}" for p in probs])} |
-| Average score | {float(np.mean(probs)):.4f} |
-| Threshold | 0.50 score / {CONF_THRESHOLD}% confidence |
-                """)
+| Device | CC1101 + ESP32 |
+| Modulation | FSK |
+| Frequency | {CENTER_FREQ / 1e6:.2f} MHz |
+| Sample rate | {int(SAMPLE_RATE / 1e6)} Msps |
+| Classifier | 1D CNN |
+| Parameters | 44,577 |
+""")
+    st.divider()
+    st.markdown("### Model Performance")
+    st.markdown("""
+| Metric | Value |
+|---|---|
+| Test accuracy | 99.69% |
+| Rogue recall | 100.00% |
+""")
+    st.divider()
+    st.markdown("### About")
+    st.caption("RF Fingerprinting for Physical Layer Authentication · HKR 2026.")
 
-st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-st.markdown("""
-<p style="font-size:11px;color:#334155;text-align:center">
-RF Fingerprinting for Physical Layer Authentication · HKR 2026 ·
-RFFPLA_Classifier (1D CNN) · 99.69% test accuracy
+# ── Header ────────────────────────────────────────────────────────────────────
+h_left, h_right = st.columns([3, 1])
+with h_left:
+    st.markdown("""
+<p style="font-family:'Outfit',sans-serif;font-size:28px;font-weight:700;margin:0;color:#f1f5f9">
+\U0001f6e1 RF Physical Layer Authentication
+</p>
+<p style="font-family:'Outfit',sans-serif;font-size:14px;color:#64748b;margin:4px 0 0 0">
+Physical Layer Authentication System \u2014 1D Convolutional Neural Network
 </p>
 """, unsafe_allow_html=True)
-```
 
----
+with h_right:
+    pill = (
+        '<span class="pill-ok">\u25cf Model loaded</span>'
+        if model_ok else
+        '<span class="pill-err">\u25cf Model not found</span>'
+    )
+    st.markdown(
+        f'<div style="text-align:right;padding-top:8px">'
+        f'{pill}'
+        f'<span class="tag">CC1101 \u00b7 FSK \u00b7 {CENTER_FREQ / 1e6:.2f} MHz</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-**What changed from the previous version:**
-- `load_model` now uses `tflite_runtime` instead of TensorFlow
-- `predict` now runs the TFLite interpreter loop instead of `model.predict()`
-- Removed `from tensorflow import keras` import entirely
-- All special characters like `µ` replaced with plain `us` to avoid encoding issues
+st.divider()
 
-After replacing `app.py` in GitHub, also make sure your `requirements.txt` contains exactly:
-```
-streamlit
-numpy
-matplotlib
-tflite-runtime
+# ── Summary stats bar ─────────────────────────────────────────────────────────
+_log     = st.session_state.session_log
+_n_files = len(_log)
+_n_pass  = sum(1 for e in _log if e["result"] == "PASS")
+_pct     = f"{_n_pass / _n_files * 100:.0f}%" if _n_files else "\u2014"
+
+s1, s2, s3, s4 = st.columns(4)
+s1.metric("Test accuracy",      "99.69%")
+s2.metric("Rogue recall",       "100.00%")
+s3.metric("Files this session", str(_n_files))
+s4.metric("Session pass rate",  _pct)
+
+st.divider()
+
+if not model_ok:
+    st.error(model_err)
+
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab1, tab2 = st.tabs(["Authentication", "Compare mode"])
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Authentication
+# ════════════════════════════════════════════════════════════════════════════════
+with tab1:
+    left, right = st.columns([1, 1.6], gap="large")
+
+    with left:
+        st.markdown('<p class="sec">Upload Signal</p>', unsafe_allow_html=True)
+        uploaded = st.file_uploader(
+            "GNU Radio .c64 capture file",
+            type=["c64"],
+            label_visibility="collapsed",
+            key="up1",
+        )
+        st.caption("5\u201312 second recording recommended \u00b7 Max 200 MB")
+        st.divider()
+        DISPLAY_THRESHOLD = st.slider(
+            "Confidence threshold", 0.50, 0.95, 0.70, 0.05,
+            help="Minimum confidence required for a PASS decision",
+            key="thr1",
+        )
+
+    with right:
+        st.markdown('<p class="sec">Authentication Result</p>', unsafe_allow_html=True)
+
+        if uploaded is None:
+            st.markdown("""
+<div class="card-idle">
+  <p style="font-size:32px;margin:0 0 8px 0">\U0001f6e1</p>
+  <p style="color:#475569;font-size:15px;margin:0 0 4px 0;font-weight:500">Awaiting signal input</p>
+  <p style="color:#334155;font-size:13px;margin:0">Upload a .c64 capture file to begin</p>
+</div>
+""", unsafe_allow_html=True)
+        else:
+            raw    = uploaded.read()
+            n_samp = len(raw) // 8  # complex64 = 8 bytes
+
+            if n_samp < 1000:
+                st.error(
+                    "File too small. Minimum recommended recording is 5 seconds at 2 Msps."
+                )
+            elif not model_ok:
+                st.error(model_err)
+            else:
+                with st.spinner("Analysing signal..."):
+                    arrays, bursts = extract_all_bursts(raw)
+
+                if not arrays:
+                    st.error(
+                        "No signal burst detected. Try a longer recording or check "
+                        "that the squelch threshold is not too high."
+                    )
+                else:
+                    is_auth, conf, probs, std = predict(arrays, model)
+                    n   = len(arrays)
+                    dur = len(raw) / (SAMPLE_RATE * 8)
+                    thr = DISPLAY_THRESHOLD * 100
+                    low = conf < thr
+
+                    if low:
+                        st.markdown(f"""
+<div class="card-warn">
+  <div class="verdict c-warn">Low Confidence</div>
+  <div class="conf-num" style="color:#d97706">{conf:.1f}%</div>
+  <p style="font-size:13px;color:#94a3b8;margin:0 0 8px">
+    System could not make a reliable decision.
+    Try re-recording closer to the receiver.
+  </p>
+  <div class="meta">
+    <span>Bursts: <span class="v">{n}</span></span>
+    <span>Duration: <span class="v">~{dur:.1f}s</span></span>
+    <span>Std dev: <span class="v">{std * 100:.1f}%</span></span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                    elif is_auth:
+                        st.markdown(f"""
+<div class="card-pass">
+  <div class="verdict c-pass">AUTHORIZED</div>
+  <div class="conf-num" style="color:#1D9E75">{conf:.1f}%</div>
+  <p style="font-size:13px;color:#94a3b8;margin:0 0 8px">
+    Signal fingerprint matches enrolled device
+  </p>
+  <div class="meta">
+    <span>Enrolled: <span class="v">CC1101+ESP32 FSK</span></span>
+    <span>Bursts: <span class="v">{n}</span></span>
+    <span>Duration: <span class="v">~{dur:.1f}s</span></span>
+    <span>Std dev: <span class="v">{std * 100:.1f}%</span></span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+<div class="card-fail">
+  <div class="verdict c-fail">ACCESS DENIED</div>
+  <div class="conf-num" style="color:#D85A30">{conf:.1f}%</div>
+  <p style="font-size:13px;color:#94a3b8;margin:0 0 8px">
+    Signal does not match enrolled device fingerprint
+  </p>
+  <div class="meta">
+    <span>Bursts: <span class="v">{n}</span></span>
+    <span>Duration: <span class="v">~{dur:.1f}s</span></span>
+    <span>Std dev: <span class="v">{std * 100:.1f}%</span></span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+                    st.progress(min(conf / 100, 1.0))
+
+                    # Append to session log (deduplicate same file across reruns)
+                    result_str = "PASS" if (is_auth and not low) else "FAIL"
+                    entry = {
+                        "time":       datetime.datetime.now().strftime("%H:%M"),
+                        "file":       uploaded.name,
+                        "result":     result_str,
+                        "confidence": round(conf, 1),
+                        "bursts":     n,
+                    }
+                    log = st.session_state.session_log
+                    if not log or log[0]["file"] != uploaded.name:
+                        st.session_state.session_log.insert(0, entry)
+
+                    st.divider()
+                    st.markdown('<p class="sec">Signal Fingerprint Analysis</p>',
+                                unsafe_allow_html=True)
+
+                    ca, cb, cc = st.columns(3)
+                    with ca:
+                        st.plotly_chart(chart_amp(bursts[0], is_auth),
+                                        use_container_width=True)
+                        st.caption(
+                            f"Captured at {CENTER_FREQ / 1e6:.2f} MHz \u00b7 "
+                            f"{int(SAMPLE_RATE / 1e6)} Msps \u00b7 "
+                            f"{WINDOW_SIZE}-sample window"
+                        )
+                    with cb:
+                        st.plotly_chart(chart_iq(bursts[0]), use_container_width=True)
+                    with cc:
+                        st.plotly_chart(chart_conf(probs, thr), use_container_width=True)
+
+                    with st.expander("Technical details"):
+                        active = int(np.sum(np.abs(bursts[0]) > 0.01))
+                        st.markdown(f"""
+| | |
+|---|---|
+| File | `{uploaded.name}` |
+| Size | {len(raw) / 1e6:.1f} MB |
+| Duration | ~{dur:.1f} s |
+| Bursts extracted | {n} |
+| Sample count | {n_samp:,} |
+| Active samples | {active} ({active / SAMPLE_RATE * 1e6:.1f} \u00b5s) |
+| Individual scores | {", ".join(f"{p:.3f}" for p in probs)} |
+| Average score | {float(np.mean(probs)):.4f} |
+| Threshold (display) | {thr:.0f}% confidence |
+| Threshold (model) | 0.50 score |
+""")
+
+    # Session log (full width, below the two columns)
+    st.divider()
+    st.markdown('<p class="sec">Session Log</p>', unsafe_allow_html=True)
+    if not st.session_state.session_log:
+        st.caption("No files processed yet this session.")
+    else:
+        df = pd.DataFrame(
+            st.session_state.session_log,
+            columns=["time", "file", "result", "confidence", "bursts"],
+        )
+        df.columns = ["Time", "File", "Result", "Confidence%", "Bursts"]
+        df["Result"] = df["Result"].apply(
+            lambda r: "\u2705 PASS" if r == "PASS" else "\u274c FAIL"
+        )
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Compare mode
+# ════════════════════════════════════════════════════════════════════════════════
+with tab2:
+    st.markdown('<p class="sec">Compare two signal captures</p>',
+                unsafe_allow_html=True)
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**Signal A \u2014 authorized device**")
+        file_a = st.file_uploader(
+            "Signal A", type=["c64"], label_visibility="collapsed", key="cmp_a"
+        )
+    with col_b:
+        st.markdown("**Signal B \u2014 rogue / unknown device**")
+        file_b = st.file_uploader(
+            "Signal B", type=["c64"], label_visibility="collapsed", key="cmp_b"
+        )
+
+    if file_a is None or file_b is None:
+        st.info("Upload both Signal A and Signal B to run comparison.")
+    elif not model_ok:
+        st.error(model_err)
+    else:
+        raw_a, raw_b = file_a.read(), file_b.read()
+        na, nb = len(raw_a) // 8, len(raw_b) // 8
+
+        size_err = False
+        if na < 1000:
+            st.error("Signal A: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+            size_err = True
+        if nb < 1000:
+            st.error("Signal B: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+            size_err = True
+
+        if not size_err:
+            with st.spinner("Analysing both signals..."):
+                arrays_a, bursts_a = extract_all_bursts(raw_a)
+                arrays_b, bursts_b = extract_all_bursts(raw_b)
+
+            burst_err = False
+            if not arrays_a:
+                st.error("Signal A: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
+                burst_err = True
+            if not arrays_b:
+                st.error("Signal B: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
+                burst_err = True
+
+            if not burst_err:
+                auth_a, conf_a, probs_a, std_a = predict(arrays_a, model)
+                auth_b, conf_b, probs_b, std_b = predict(arrays_b, model)
+                dur_a = len(raw_a) / (SAMPLE_RATE * 8)
+                dur_b = len(raw_b) / (SAMPLE_RATE * 8)
+
+                CMP_THR = st.slider(
+                    "Confidence threshold (compare)", 0.50, 0.95, 0.70, 0.05,
+                    key="thr2",
+                ) * 100
+                low_a  = conf_a < CMP_THR
+                low_b  = conf_b < CMP_THR
+                pass_a = auth_a and not low_a
+                pass_b = auth_b and not low_b
+
+                # ── Side-by-side result cards ─────────────────────────────────
+                def _cmp_card(col, sig, conf, auth, low, n_bursts, std):
+                    if low:
+                        html = (
+                            f'<div class="card-warn">'
+                            f'<div class="verdict c-warn">Low Confidence \u2014 {sig}</div>'
+                            f'<div class="conf-num" style="color:#d97706">{conf:.1f}%</div>'
+                            f'<div class="meta">'
+                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+                            f'</div></div>'
+                        )
+                    elif auth:
+                        html = (
+                            f'<div class="card-pass">'
+                            f'<div class="verdict c-pass">AUTHORIZED \u2014 {sig}</div>'
+                            f'<div class="conf-num" style="color:#1D9E75">{conf:.1f}%</div>'
+                            f'<div class="meta">'
+                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+                            f'</div></div>'
+                        )
+                    else:
+                        html = (
+                            f'<div class="card-fail">'
+                            f'<div class="verdict c-fail">ACCESS DENIED \u2014 {sig}</div>'
+                            f'<div class="conf-num" style="color:#D85A30">{conf:.1f}%</div>'
+                            f'<div class="meta">'
+                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+                            f'</div></div>'
+                        )
+                    with col:
+                        st.markdown(html, unsafe_allow_html=True)
+                        st.progress(min(conf / 100, 1.0))
+
+                rc_a, rc_b = st.columns(2)
+                _cmp_card(rc_a, "Signal A", conf_a, auth_a, low_a, len(arrays_a), std_a)
+                _cmp_card(rc_b, "Signal B", conf_b, auth_b, low_b, len(arrays_b), std_b)
+
+                st.divider()
+
+                # ── Amplitude overlay ─────────────────────────────────────────
+                st.plotly_chart(
+                    chart_overlay(bursts_a[0], bursts_b[0]),
+                    use_container_width=True,
+                )
+                st.caption(
+                    f"Captured at {CENTER_FREQ / 1e6:.2f} MHz \u00b7 "
+                    f"{int(SAMPLE_RATE / 1e6)} Msps \u00b7 "
+                    f"{WINDOW_SIZE}-sample window"
+                )
+
+                st.divider()
+
+                # ── Side-by-side I/Q ──────────────────────────────────────────
+                st.markdown('<p class="sec">I / Q Channels</p>',
+                            unsafe_allow_html=True)
+                iq_ca, iq_cb = st.columns(2)
+                with iq_ca:
+                    st.plotly_chart(
+                        chart_iq(bursts_a[0], "Signal A \u2014 I / Q"),
+                        use_container_width=True,
+                    )
+                with iq_cb:
+                    st.plotly_chart(
+                        chart_iq(bursts_b[0], "Signal B \u2014 I / Q"),
+                        use_container_width=True,
+                    )
+
+                st.divider()
+
+                # ── Difference summary table ───────────────────────────────────
+                st.markdown('<p class="sec">Comparison Summary</p>',
+                            unsafe_allow_html=True)
+                v_a = "PASS" if pass_a else ("LOW CONF" if low_a else "FAIL")
+                v_b = "PASS" if pass_b else ("LOW CONF" if low_b else "FAIL")
+                st.table(pd.DataFrame({
+                    "Metric": [
+                        "Confidence", "Decision", "Bursts extracted",
+                        "Burst std dev", "File size", "Duration",
+                    ],
+                    "Signal A": [
+                        f"{conf_a:.1f}%", v_a, str(len(arrays_a)),
+                        f"{std_a * 100:.1f}%",
+                        f"{len(raw_a) / 1e6:.1f} MB",
+                        f"~{dur_a:.1f}s",
+                    ],
+                    "Signal B": [
+                        f"{conf_b:.1f}%", v_b, str(len(arrays_b)),
+                        f"{std_b * 100:.1f}%",
+                        f"{len(raw_b) / 1e6:.1f} MB",
+                        f"~{dur_b:.1f}s",
+                    ],
+                }))
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+st.divider()
+st.markdown("""
+<p style="font-size:11px;color:#334155;text-align:center;font-family:'Outfit',sans-serif">
+RF Fingerprinting for Physical Layer Authentication \u00b7 HKR 2026 \u00b7
+RFFPLA_Classifier (1D CNN) \u00b7 99.69% test accuracy
+</p>
+""", unsafe_allow_html=True)

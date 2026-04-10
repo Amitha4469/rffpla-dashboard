@@ -1,0 +1,5 @@
+*.h5
+*.npy
+*.c64
+__pycache__/
+.env
