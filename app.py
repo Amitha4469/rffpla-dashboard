@@ -6,10 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from config import THRESHOLD, WINDOW_SIZE, SAMPLE_RATE, CENTER_FREQ, MODEL_PATH
-
-GUARD      = 50
-MIN_LEN    = 80
-MAX_BURSTS = 20
+from preprocess import extract_bursts
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -175,33 +172,6 @@ def load_model():
         return None, str(e)
 
 
-def extract_all_bursts(raw_bytes):
-    floats = np.frombuffer(raw_bytes, dtype=np.float32).copy()
-    if len(floats) % 2 != 0:
-        floats = floats[:-1]
-    iq  = (floats[0::2] + 1j * floats[1::2]).astype(np.complex64)
-    amp = np.abs(iq)
-    asm = np.convolve(amp, np.ones(20) / 20, mode="same")
-    pad = np.concatenate([[False], asm > THRESHOLD, [False]])
-    d   = np.diff(pad.astype(np.int8))
-    sts = np.where(d ==  1)[0]
-    ens = np.where(d == -1)[0]
-    arrays, bursts = [], []
-    for s, e in zip(sts, ens):
-        if len(arrays) >= MAX_BURSTS:
-            break
-        b = iq[max(0, s - GUARD):min(len(iq), e + GUARD)]
-        if len(b) < MIN_LEN:
-            continue
-        pk = np.max(np.abs(b))
-        if pk > 0:
-            b = b / pk
-        b = b[:WINDOW_SIZE] if len(b) >= WINDOW_SIZE else np.concatenate(
-            [b, np.zeros(WINDOW_SIZE - len(b), dtype=np.complex64)])
-        arrays.append(np.stack([b.real, b.imag], axis=-1).astype(np.float32))
-        bursts.append(b)
-    return arrays, bursts
-
 
 def predict(arrays, model):
     interpreter    = model
@@ -349,9 +319,9 @@ with tab1:
                 st.error(model_err)
             else:
                 with st.spinner("Analysing signal..."):
-                    arrays, bursts = extract_all_bursts(raw)
+                    X, bursts, info = extract_bursts(raw)
 
-                if not arrays:
+                if not len(X):
                     st.error(
                         "No signal burst detected. Try a longer recording or check "
                         "that the squelch threshold is not too high."
@@ -515,22 +485,22 @@ with tab2:
 
         if not size_err:
             with st.spinner("Analysing both signals..."):
-                arrays_a, bursts_a = extract_all_bursts(raw_a)
-                arrays_b, bursts_b = extract_all_bursts(raw_b)
+                X_a, bursts_a, info_a = extract_bursts(raw_a)
+                X_b, bursts_b, info_b = extract_bursts(raw_b)
 
             burst_err = False
-            if not arrays_a:
+            if not len(X_a):
                 st.error("Signal A: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
                 burst_err = True
-            if not arrays_b:
+            if not len(X_b):
                 st.error("Signal B: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
                 burst_err = True
 
             if not burst_err:
-                auth_a, conf_a, probs_a, std_a = predict(arrays_a, model)
-                auth_b, conf_b, probs_b, std_b = predict(arrays_b, model)
-                dur_a = len(raw_a) / (SAMPLE_RATE * 8)
-                dur_b = len(raw_b) / (SAMPLE_RATE * 8)
+                auth_a, conf_a, probs_a, std_a = predict(X_a, model)
+                auth_b, conf_b, probs_b, std_b = predict(X_b, model)
+                dur_a = info_a["duration_s"]
+                dur_b = info_b["duration_s"]
 
                 CMP_THR = st.slider(
                     "Confidence threshold (compare)", 0.50, 0.95, 0.70, 0.05,
@@ -578,8 +548,8 @@ with tab2:
                         st.progress(min(conf / 100, 1.0))
 
                 rc_a, rc_b = st.columns(2)
-                _cmp_card(rc_a, "Signal A", conf_a, auth_a, low_a, len(arrays_a), std_a)
-                _cmp_card(rc_b, "Signal B", conf_b, auth_b, low_b, len(arrays_b), std_b)
+                _cmp_card(rc_a, "Signal A", conf_a, auth_a, low_a, len(X_a), std_a)
+                _cmp_card(rc_b, "Signal B", conf_b, auth_b, low_b, len(X_b), std_b)
 
                 st.divider()
 
@@ -624,13 +594,13 @@ with tab2:
                         "Burst std dev", "File size", "Duration",
                     ],
                     "Signal A": [
-                        f"{conf_a:.1f}%", v_a, str(len(arrays_a)),
+                        f"{conf_a:.1f}%", v_a, str(len(X_a)),
                         f"{std_a * 100:.1f}%",
                         f"{len(raw_a) / 1e6:.1f} MB",
                         f"~{dur_a:.1f}s",
                     ],
                     "Signal B": [
-                        f"{conf_b:.1f}%", v_b, str(len(arrays_b)),
+                        f"{conf_b:.1f}%", v_b, str(len(X_b)),
                         f"{std_b * 100:.1f}%",
                         f"{len(raw_b) / 1e6:.1f} MB",
                         f"~{dur_b:.1f}s",
