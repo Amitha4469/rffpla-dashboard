@@ -26,7 +26,8 @@ from config import THRESHOLD, WINDOW_SIZE, SAMPLE_RATE
 _SMOOTH_WIN = 20    # samples in the moving-average amplitude smoother
 _GUARD      = 50    # guard samples prepended/appended around each burst edge
 _MIN_LEN    = 80    # minimum burst length (samples) before windowing
-_MAX_BURSTS = 20    # cap per file to avoid very long captures dominating
+_MAX_BURSTS      = 20          # cap per file to avoid very long captures dominating
+_MAX_PROC_SAMPLES = 30_000_000  # ~15 s at 2 Msps; hard cap before O(N) convolution
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -66,7 +67,18 @@ def extract_bursts(source):
     if len(floats) % 2 != 0:
         floats = floats[:-1]
 
-    iq          = (floats[0::2] + 1j * floats[1::2]).astype(np.complex64)
+    iq = (floats[0::2] + 1j * floats[1::2]).astype(np.complex64)
+
+    # Truncate before O(N) ops — defence-in-depth even when the size guard in
+    # app.py has already capped the upload.
+    if len(iq) > _MAX_PROC_SAMPLES:
+        iq = iq[:_MAX_PROC_SAMPLES]
+
+    # Replace NaN / Inf that arise from corrupted or non-.c64 files so they
+    # don't propagate silently through amplitude and convolution steps.
+    if not np.all(np.isfinite(iq)):
+        iq = np.where(np.isfinite(iq), iq, np.complex64(0))
+
     sample_count = len(iq)
     duration_s   = sample_count / SAMPLE_RATE
 

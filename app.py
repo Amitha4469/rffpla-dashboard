@@ -1,3 +1,4 @@
+import hashlib
 import os
 import datetime
 import streamlit as st
@@ -5,8 +6,26 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from config import THRESHOLD, WINDOW_SIZE, SAMPLE_RATE, CENTER_FREQ, MODEL_PATH
+from config import WINDOW_SIZE, SAMPLE_RATE, CENTER_FREQ, MODEL_PATH
 from preprocess import extract_bursts
+
+# ── Upload security constants ─────────────────────────────────────────────────
+_MAX_UPLOAD_BYTES = 200 * 1_048_576   # 200 MiB hard cap — checked before .read()
+_MAX_FILENAME_LEN = 255
+
+
+def _safe_filename(name: str) -> str:
+    """Sanitize an uploaded filename for safe display.
+
+    Strips directory separators (prevents path-traversal strings like
+    '../../etc/passwd' appearing in the session log or expanders), trims
+    to a safe length, and removes non-printable characters.
+    """
+    name = os.path.basename(name.replace("\\", "/"))
+    name = name[:_MAX_FILENAME_LEN].strip()
+    name = "".join(c for c in name if c.isprintable())
+    return name or "unnamed_file"
+
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -155,9 +174,54 @@ def chart_overlay(burst_a, burst_b):
     return f
 
 
-# ── Model & signal processing (logic unchanged) ───────────────────────────────
-@st.cache_resource
+def _cmp_card(col, sig: str, confidence: float, auth: bool, low: bool,
+              n_bursts: int, std: float) -> None:
+    """Render a compare-mode result card and progress bar into a Streamlit column."""
+    if low:
+        html = (
+            f'<div class="card-warn">'
+            f'<div class="verdict c-warn">Low Confidence \u2014 {sig}</div>'
+            f'<div class="conf-num" style="color:#d97706">{confidence:.1f}%</div>'
+            f'<div class="meta">'
+            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+            f'</div></div>'
+        )
+    elif auth:
+        html = (
+            f'<div class="card-pass">'
+            f'<div class="verdict c-pass">AUTHORIZED \u2014 {sig}</div>'
+            f'<div class="conf-num" style="color:#1D9E75">{confidence:.1f}%</div>'
+            f'<div class="meta">'
+            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+            f'</div></div>'
+        )
+    else:
+        html = (
+            f'<div class="card-fail">'
+            f'<div class="verdict c-fail">ACCESS DENIED \u2014 {sig}</div>'
+            f'<div class="conf-num" style="color:#D85A30">{confidence:.1f}%</div>'
+            f'<div class="meta">'
+            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
+            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
+            f'</div></div>'
+        )
+    with col:
+        st.markdown(html, unsafe_allow_html=True)
+        st.progress(min(confidence / 100, 1.0))
+
+
+# ── Model loading & signal parsing ───────────────────────────────────────────
+
+@st.cache_resource(show_spinner="Loading RFFPLA classifier…")
 def load_model():
+    # @st.cache_resource is correct here because TFLite Interpreter objects
+    # hold native memory (allocated tensor buffers) that cannot be pickled.
+    # The decorator keeps a single interpreter instance alive for the entire
+    # server process and shares it across all Streamlit sessions — meaning
+    # allocate_tensors() is called exactly once no matter how many users or
+    # re-runs occur.  show_spinner gives visible feedback on cold start.
     if not os.path.exists(MODEL_PATH):
         return None, (
             f"Model file not found at {MODEL_PATH}. "
@@ -172,17 +236,59 @@ def load_model():
         return None, str(e)
 
 
+def _hash_upload_bytes(b: bytes) -> int:
+    """Partial-content hash for large binary uploads used as a @st.cache_data key.
+
+    Streamlit's default bytes hasher walks the entire buffer — ~100–200 ms for
+    a 200 MB file — on *every* re-run, even when returning a cache hit.
+    This function hashes only: 8-byte little-endian file length + first 64 KiB
+    + last 64 KiB, which takes ~0.2 ms and is effectively unique for real .c64
+    captures (different recordings always differ in at least one of those regions).
+    """
+    chunk = 65_536  # 64 KiB
+    h = hashlib.blake2b(digest_size=16)
+    h.update(len(b).to_bytes(8, "little"))
+    h.update(b[:chunk])
+    if len(b) > chunk:
+        h.update(b[-chunk:])
+    return int.from_bytes(h.digest(), "little")
+
+
+@st.cache_data(
+    show_spinner=False,          # caller already owns a st.spinner context
+    max_entries=10,              # bound cached outputs to ~3.2 MB total (see below)
+    hash_funcs={bytes: _hash_upload_bytes},  # use fast partial hash, not full scan
+)
+def _parse_upload(raw: bytes):
+    """Extract bursts from a .c64 upload once; serve the cached result on re-runs.
+
+    Every Streamlit interaction — slider move, tab switch, widget click — triggers
+    a full script re-run.  Without this cache, extract_bursts() repeats on every
+    interaction: that means np.convolve() over up to 25 M samples (~1–2 s) each
+    time the user adjusts the confidence slider.
+
+    @st.cache_data serialises only the *outputs* (X, bursts, info) via pickle,
+    not the raw bytes, so ``del raw`` in the caller still frees the ~200 MB
+    upload buffer immediately after the first parse.
+
+    Memory budget for max_entries=10:
+        X arrays   : 10 × 20 bursts × 1 024 samples × 2 ch × 4 B ≈ 1.6 MB
+        burst lists: 10 × 20 × 1 024 × 8 B (complex64)            ≈ 1.6 MB
+        Total                                                       ≈ 3.2 MB
+    — bounded regardless of the original 200 MB file sizes.
+    """
+    return extract_bursts(raw)
+
 
 def predict(arrays, model):
-    interpreter    = model
-    input_details  = interpreter.get_input_details()
-    output_details = interpreter.get_output_details()
+    input_details  = model.get_input_details()
+    output_details = model.get_output_details()
     probs = []
     for arr in arrays:
         inp = arr[np.newaxis, :, :].astype(np.float32)
-        interpreter.set_tensor(input_details[0]["index"], inp)
-        interpreter.invoke()
-        p = float(interpreter.get_tensor(output_details[0]["index"])[0][0])
+        model.set_tensor(input_details[0]["index"], inp)
+        model.invoke()
+        p = float(model.get_tensor(output_details[0]["index"])[0][0])
         probs.append(p)
     probs   = np.array(probs)
     avg     = float(np.mean(probs))
@@ -190,6 +296,23 @@ def predict(arrays, model):
     is_auth = avg < 0.5
     conf    = (1 - avg) * 100 if is_auth else avg * 100
     return is_auth, conf, probs, std
+
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def _run_predict(X: np.ndarray) -> tuple:
+    """Run TFLite inference once per unique burst set; cache across re-runs.
+
+    Without this cache, all 20 inference passes repeat on every slider move
+    or tab switch even though the signal data has not changed.  Combined with
+    _parse_upload, the caching chain is: parse once → infer once → only
+    threshold-dependent UI (the result card, progress bar, chart_conf) rebuilds
+    on each interaction.
+
+    load_model() is @st.cache_resource so the call here is a free no-op after
+    the first load — it never re-allocates tensors or re-reads the .tflite file.
+    """
+    interp, _ = load_model()
+    return predict(X, interp)
 
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -308,33 +431,44 @@ with tab1:
 </div>
 """, unsafe_allow_html=True)
         else:
-            raw    = uploaded.read()
-            n_samp = len(raw) // 8  # complex64 = 8 bytes
+            safe_name = _safe_filename(uploaded.name)
 
-            if n_samp < 1000:
+            # ── Size guard: check before .read() to prevent loading into memory ──
+            if uploaded.size > _MAX_UPLOAD_BYTES:
                 st.error(
-                    "File too small. Minimum recommended recording is 5 seconds at 2 Msps."
+                    f"File too large ({uploaded.size / 1_048_576:.1f} MiB). "
+                    "Maximum is 200 MB — try a shorter recording."
                 )
-            elif not model_ok:
-                st.error(model_err)
             else:
-                with st.spinner("Analysing signal..."):
-                    X, bursts, info = extract_bursts(raw)
+                raw        = uploaded.read()
+                file_bytes = len(raw)            # store size before del
+                n_samp     = file_bytes // 8     # complex64 = 8 bytes
 
-                if not len(X):
+                if n_samp < 1000:
                     st.error(
-                        "No signal burst detected. Try a longer recording or check "
-                        "that the squelch threshold is not too high."
+                        "File too small. Minimum recommended recording is 5 seconds at 2 Msps."
                     )
+                elif not model_ok:
+                    st.error(model_err)
                 else:
-                    is_auth, conf, probs, std = predict(arrays, model)
-                    n   = len(arrays)
-                    dur = len(raw) / (SAMPLE_RATE * 8)
-                    thr = DISPLAY_THRESHOLD * 100
-                    low = conf < thr
+                    with st.spinner("Analysing signal..."):
+                        X, bursts, info = _parse_upload(raw)
+                    del raw  # release raw bytes (~200 MB) — cache stores outputs only
 
-                    if low:
-                        st.markdown(f"""
+                    if not len(X):
+                        st.error(
+                            "No signal burst detected. Try a longer recording or check "
+                            "that the squelch threshold is not too high."
+                        )
+                    else:
+                        is_auth, conf, probs, std = _run_predict(X)
+                        n   = len(X)
+                        dur = info["duration_s"]
+                        thr = DISPLAY_THRESHOLD * 100
+                        low = conf < thr
+
+                        if low:
+                            st.markdown(f"""
 <div class="card-warn">
   <div class="verdict c-warn">Low Confidence</div>
   <div class="conf-num" style="color:#d97706">{conf:.1f}%</div>
@@ -349,8 +483,8 @@ with tab1:
   </div>
 </div>
 """, unsafe_allow_html=True)
-                    elif is_auth:
-                        st.markdown(f"""
+                        elif is_auth:
+                            st.markdown(f"""
 <div class="card-pass">
   <div class="verdict c-pass">AUTHORIZED</div>
   <div class="conf-num" style="color:#1D9E75">{conf:.1f}%</div>
@@ -365,8 +499,8 @@ with tab1:
   </div>
 </div>
 """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
+                        else:
+                            st.markdown(f"""
 <div class="card-fail">
   <div class="verdict c-fail">ACCESS DENIED</div>
   <div class="conf-num" style="color:#D85A30">{conf:.1f}%</div>
@@ -381,46 +515,46 @@ with tab1:
 </div>
 """, unsafe_allow_html=True)
 
-                    st.progress(min(conf / 100, 1.0))
+                        st.progress(min(conf / 100, 1.0))
 
-                    # Append to session log (deduplicate same file across reruns)
-                    result_str = "PASS" if (is_auth and not low) else "FAIL"
-                    entry = {
-                        "time":       datetime.datetime.now().strftime("%H:%M"),
-                        "file":       uploaded.name,
-                        "result":     result_str,
-                        "confidence": round(conf, 1),
-                        "bursts":     n,
-                    }
-                    log = st.session_state.session_log
-                    if not log or log[0]["file"] != uploaded.name:
-                        st.session_state.session_log.insert(0, entry)
+                        # Append to session log (deduplicate same file across reruns)
+                        result_str = "PASS" if (is_auth and not low) else "FAIL"
+                        entry = {
+                            "time":       datetime.datetime.now().strftime("%H:%M"),
+                            "file":       safe_name,
+                            "result":     result_str,
+                            "confidence": round(conf, 1),
+                            "bursts":     n,
+                        }
+                        log = st.session_state.session_log
+                        if not log or log[0]["file"] != safe_name:
+                            st.session_state.session_log.insert(0, entry)
 
-                    st.divider()
-                    st.markdown('<p class="sec">Signal Fingerprint Analysis</p>',
-                                unsafe_allow_html=True)
+                        st.divider()
+                        st.markdown('<p class="sec">Signal Fingerprint Analysis</p>',
+                                    unsafe_allow_html=True)
 
-                    ca, cb, cc = st.columns(3)
-                    with ca:
-                        st.plotly_chart(chart_amp(bursts[0], is_auth),
-                                        use_container_width=True)
-                        st.caption(
-                            f"Captured at {CENTER_FREQ / 1e6:.2f} MHz \u00b7 "
-                            f"{int(SAMPLE_RATE / 1e6)} Msps \u00b7 "
-                            f"{WINDOW_SIZE}-sample window"
-                        )
-                    with cb:
-                        st.plotly_chart(chart_iq(bursts[0]), use_container_width=True)
-                    with cc:
-                        st.plotly_chart(chart_conf(probs, thr), use_container_width=True)
+                        ca, cb, cc = st.columns(3)
+                        with ca:
+                            st.plotly_chart(chart_amp(bursts[0], is_auth),
+                                            use_container_width=True)
+                            st.caption(
+                                f"Captured at {CENTER_FREQ / 1e6:.2f} MHz \u00b7 "
+                                f"{int(SAMPLE_RATE / 1e6)} Msps \u00b7 "
+                                f"{WINDOW_SIZE}-sample window"
+                            )
+                        with cb:
+                            st.plotly_chart(chart_iq(bursts[0]), use_container_width=True)
+                        with cc:
+                            st.plotly_chart(chart_conf(probs, thr), use_container_width=True)
 
-                    with st.expander("Technical details"):
-                        active = int(np.sum(np.abs(bursts[0]) > 0.01))
-                        st.markdown(f"""
+                        with st.expander("Technical details"):
+                            active = int(np.sum(np.abs(bursts[0]) > 0.01))
+                            st.markdown(f"""
 | | |
 |---|---|
-| File | `{uploaded.name}` |
-| Size | {len(raw) / 1e6:.1f} MB |
+| File | `{safe_name}` |
+| Size | {file_bytes / 1e6:.1f} MB |
 | Duration | ~{dur:.1f} s |
 | Bursts extracted | {n} |
 | Sample count | {n_samp:,} |
@@ -472,33 +606,64 @@ with tab2:
     elif not model_ok:
         st.error(model_err)
     else:
-        raw_a, raw_b = file_a.read(), file_b.read()
-        na, nb = len(raw_a) // 8, len(raw_b) // 8
-
         size_err = False
-        if na < 1000:
-            st.error("Signal A: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+
+        # ── Size guards: check before .read() to prevent loading into memory ──
+        if file_a.size > _MAX_UPLOAD_BYTES:
+            st.error(
+                f"Signal A too large ({file_a.size / 1_048_576:.1f} MiB). "
+                "Maximum is 200 MB."
+            )
             size_err = True
-        if nb < 1000:
-            st.error("Signal B: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+        if file_b.size > _MAX_UPLOAD_BYTES:
+            st.error(
+                f"Signal B too large ({file_b.size / 1_048_576:.1f} MiB). "
+                "Maximum is 200 MB."
+            )
             size_err = True
 
         if not size_err:
+            # Process sequentially so only one ~200 MB raw buffer is in memory
+            # at a time — halves peak RAM vs. reading both files simultaneously.
             with st.spinner("Analysing both signals..."):
-                X_a, bursts_a, info_a = extract_bursts(raw_a)
-                X_b, bursts_b, info_b = extract_bursts(raw_b)
+                raw_a = file_a.read()
+                na    = len(raw_a) // 8
+                if na < 1000:
+                    st.error("Signal A: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+                    del raw_a
+                    size_err = True
+                else:
+                    X_a, bursts_a, info_a = _parse_upload(raw_a)
+                    del raw_a  # free Signal A buffer before loading Signal B
 
-            burst_err = False
-            if not len(X_a):
-                st.error("Signal A: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
-                burst_err = True
-            if not len(X_b):
-                st.error("Signal B: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
-                burst_err = True
+                if not size_err:
+                    raw_b = file_b.read()
+                    nb    = len(raw_b) // 8
+                    if nb < 1000:
+                        st.error("Signal B: File too small. Minimum recommended recording is 5 seconds at 2 Msps.")
+                        del raw_b
+                        size_err = True
+                    else:
+                        X_b, bursts_b, info_b = _parse_upload(raw_b)
+                        del raw_b  # free Signal B buffer
+
+            # Guard: X_a / X_b are only defined when their respective file passed
+            # both the size guard and the min-sample check above.  If size_err was
+            # set inside the spinner (na < 1000 or nb < 1000), referencing X_a/X_b
+            # here would raise NameError.  Propagating size_err into burst_err
+            # skips all downstream references safely.
+            burst_err = size_err
+            if not size_err:
+                if not len(X_a):
+                    st.error("Signal A: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
+                    burst_err = True
+                if not len(X_b):
+                    st.error("Signal B: No signal burst detected. Try a longer recording or check that the squelch threshold is not too high.")
+                    burst_err = True
 
             if not burst_err:
-                auth_a, conf_a, probs_a, std_a = predict(X_a, model)
-                auth_b, conf_b, probs_b, std_b = predict(X_b, model)
+                auth_a, conf_a, probs_a, std_a = _run_predict(X_a)
+                auth_b, conf_b, probs_b, std_b = _run_predict(X_b)
                 dur_a = info_a["duration_s"]
                 dur_b = info_b["duration_s"]
 
@@ -510,42 +675,6 @@ with tab2:
                 low_b  = conf_b < CMP_THR
                 pass_a = auth_a and not low_a
                 pass_b = auth_b and not low_b
-
-                # ── Side-by-side result cards ─────────────────────────────────
-                def _cmp_card(col, sig, conf, auth, low, n_bursts, std):
-                    if low:
-                        html = (
-                            f'<div class="card-warn">'
-                            f'<div class="verdict c-warn">Low Confidence \u2014 {sig}</div>'
-                            f'<div class="conf-num" style="color:#d97706">{conf:.1f}%</div>'
-                            f'<div class="meta">'
-                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
-                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
-                            f'</div></div>'
-                        )
-                    elif auth:
-                        html = (
-                            f'<div class="card-pass">'
-                            f'<div class="verdict c-pass">AUTHORIZED \u2014 {sig}</div>'
-                            f'<div class="conf-num" style="color:#1D9E75">{conf:.1f}%</div>'
-                            f'<div class="meta">'
-                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
-                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
-                            f'</div></div>'
-                        )
-                    else:
-                        html = (
-                            f'<div class="card-fail">'
-                            f'<div class="verdict c-fail">ACCESS DENIED \u2014 {sig}</div>'
-                            f'<div class="conf-num" style="color:#D85A30">{conf:.1f}%</div>'
-                            f'<div class="meta">'
-                            f'<span>Bursts: <span class="v">{n_bursts}</span></span>'
-                            f'<span>Std dev: <span class="v">{std * 100:.1f}%</span></span>'
-                            f'</div></div>'
-                        )
-                    with col:
-                        st.markdown(html, unsafe_allow_html=True)
-                        st.progress(min(conf / 100, 1.0))
 
                 rc_a, rc_b = st.columns(2)
                 _cmp_card(rc_a, "Signal A", conf_a, auth_a, low_a, len(X_a), std_a)
@@ -596,13 +725,13 @@ with tab2:
                     "Signal A": [
                         f"{conf_a:.1f}%", v_a, str(len(X_a)),
                         f"{std_a * 100:.1f}%",
-                        f"{len(raw_a) / 1e6:.1f} MB",
+                        f"{file_a.size / 1e6:.1f} MB",
                         f"~{dur_a:.1f}s",
                     ],
                     "Signal B": [
                         f"{conf_b:.1f}%", v_b, str(len(X_b)),
                         f"{std_b * 100:.1f}%",
-                        f"{len(raw_b) / 1e6:.1f} MB",
+                        f"{file_b.size / 1e6:.1f} MB",
                         f"~{dur_b:.1f}s",
                     ],
                 }))
