@@ -1,0 +1,154 @@
+import traceback
+from datetime import datetime
+
+import numpy as np
+from flask import Flask, jsonify, render_template, request
+
+from ai_edge_litert.interpreter import Interpreter
+from config import MODEL_PATH, WINDOW_SIZE
+from preprocess import extract_bursts
+
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
+
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({'error': 'File too large — maximum is 500 MB'}), 413
+
+
+# ── Model — loaded once at startup ───────────────────────────────────────────
+interpreter = Interpreter(model_path=MODEL_PATH)
+interpreter.allocate_tensors()
+input_details  = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+print('Model input shape:', input_details[0]['shape'])
+
+
+# ── Inference ─────────────────────────────────────────────────────────────────
+def predict(X):
+    probs = []
+    for i in range(len(X)):
+        inp = X[i:i+1].astype(np.float32)
+        interpreter.set_tensor(input_details[0]['index'], inp)
+        interpreter.invoke()
+        out = interpreter.get_tensor(output_details[0]['index'])
+        probs.append(float(out[0][0]))
+    probs     = np.array(probs)
+    mean_conf = float(np.mean(probs)) * 100
+    std_conf  = float(np.std(probs)) * 100
+    return mean_conf, probs.tolist(), std_conf
+
+
+# ── Burst extraction + 3-channel window builder ───────────────────────────────
+def parse_c64(raw_bytes):
+    """Return (X, bursts, info) where X has shape (N, WINDOW_SIZE, 3)."""
+    _, bursts, info = extract_bursts(raw_bytes)   # raw bytes → (X2ch, bursts, info)
+    windows = []
+    for b in bursts:
+        # bursts from extract_bursts are already exactly WINDOW_SIZE samples
+        if len(b) >= WINDOW_SIZE:
+            centre = (len(b) - WINDOW_SIZE) // 2
+            w = b[centre:centre + WINDOW_SIZE]
+        else:
+            w = np.concatenate([b, np.zeros(WINDOW_SIZE - len(b), dtype=np.complex64)])
+        I     = w.real.astype(np.float32)
+        Q     = w.imag.astype(np.float32)
+        absI  = np.abs(I)
+        absQ  = np.abs(Q)
+        ratio = absI / (absI + absQ + 1e-9)
+        windows.append(np.stack([I, Q, ratio], axis=-1))   # (WINDOW_SIZE, 3)
+    if not windows:
+        return None, bursts, info
+    return np.array(windows, dtype=np.float32), bursts, info  # (N, WINDOW_SIZE, 3)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/predict', methods=['POST'])
+def predict_route():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        raw = request.files['file'].read()
+        print(f'[/predict] received {len(raw):,} bytes')
+
+        if len(raw) < 8000:
+            return jsonify({'error': 'File too small — minimum ~5 s at 2 Msps'}), 400
+
+        X, bursts, info = parse_c64(raw)
+        print(f'[/predict] bursts={len(bursts)}  X={None if X is None else X.shape}  info={info}')
+
+        if X is None or len(X) == 0:
+            return jsonify({'error': 'No valid bursts detected — check squelch / recording length'}), 400
+
+        conf, probs, std = predict(X)
+        print(f'[/predict] conf={conf:.2f}%  std={std:.2f}%  windows={len(X)}')
+
+        b0   = bursts[0]
+        step = max(1, len(b0) // 512)
+        return jsonify({
+            'confidence': round(conf, 2),
+            'probs':      [round(p * 100, 2) for p in probs],
+            'std':        round(std, 2),
+            'n_bursts':   len(bursts),
+            'n_windows':  int(len(X)),
+            'amp':        np.abs(b0[::step]).tolist(),
+            'i_ch':       b0[::step].real.tolist(),
+            'q_ch':       b0[::step].imag.tolist(),
+            'duration_s': round(info.get('duration_s', 0), 2),
+            'n_samples':  info.get('sample_count', 0),
+            'timestamp':  datetime.now().strftime('%H:%M:%S'),
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/predict_compare', methods=['POST'])
+def predict_compare():
+    try:
+        results = {}
+        for key in ['file_a', 'file_b']:
+            if key not in request.files:
+                return jsonify({'error': f'{key} missing'}), 400
+            raw = request.files[key].read()
+            print(f'[/predict_compare] {key}: {len(raw):,} bytes')
+            if len(raw) < 8000:
+                results[key] = {'error': 'File too small'}
+                continue
+            X, bursts, info = parse_c64(raw)
+            if X is None or len(X) == 0:
+                results[key] = {'error': 'No bursts detected'}
+                continue
+            conf, probs, std = predict(X)
+            b0   = bursts[0]
+            step = max(1, len(b0) // 512)
+            results[key] = {
+                'confidence': round(conf, 2),
+                'probs':      [round(p * 100, 2) for p in probs],
+                'std':        round(std, 2),
+                'n_bursts':   len(bursts),
+                'n_windows':  int(len(X)),
+                'amp':        np.abs(b0[::step]).tolist(),
+                'i_ch':       b0[::step].real.tolist(),
+                'q_ch':       b0[::step].imag.tolist(),
+                'duration_s': round(info.get('duration_s', 0), 2),
+            }
+        return jsonify(results)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+if __name__ == '__main__':
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

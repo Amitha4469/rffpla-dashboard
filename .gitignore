@@ -1,5 +1,9 @@
-*.h5
-*.npy
-*.c64
+﻿*.h5
 __pycache__/
-.env
+*.pyc
+data/
+.streamlit/
+models/RFFPLA_classifier.tflite
+models/RFFPLA_v2.h5
+models/RFFPLA_v2.tflite
+*.ipynb

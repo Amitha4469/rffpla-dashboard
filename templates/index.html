@@ -1,0 +1,2246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PROJECT_RFFPLA · RF Physical Layer Authentication</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+  <style>
+/* ── Variables ───────────────────────────────────────────────────────────── */
+:root {
+  --signal:        #00e87a;
+  --bg-card:       #0d1e15;
+  --bg-surface:    #091510;
+  --bg-root:       #030a06;
+  --bg-main:       #0a1a0f;
+  --border:        #163220;
+  --text:          #a8e0bc;
+  --text-muted:    #366048;
+  --signal-glow:   rgba(0,232,122,0.3);
+  --signal-tint:   rgba(0,232,122,0.06);
+  --scanline-tint: rgba(0,232,122,0.15);
+  --sidebar-w:     240px;
+}
+body.theme-amber {
+  --signal:#f09c28;--bg-card:#1a1205;--bg-surface:#100c03;--bg-root:#080601;
+  --bg-main:#120f04;--border:#3a2a0a;--text:#e0cfa8;--text-muted:#6b4e10;
+  --signal-glow:rgba(240,156,40,0.3);--signal-tint:rgba(240,156,40,0.06);
+  --scanline-tint:rgba(240,156,40,0.15);
+}
+body.theme-red {
+  --signal:#e04040;--bg-card:#1a0808;--bg-surface:#0f0505;--bg-root:#080202;
+  --bg-main:#110404;--border:#3a1212;--text:#e0a8a8;--text-muted:#6b2020;
+  --signal-glow:rgba(224,64,64,0.3);--signal-tint:rgba(224,64,64,0.06);
+  --scanline-tint:rgba(224,64,64,0.15);
+}
+body.theme-red::after {
+  content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 40%,rgba(224,64,64,0.07) 100%);
+  z-index:9999;animation:threat-pulse 2s ease-in-out infinite;
+}
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*,*::before,*::after { box-sizing:border-box;margin:0;padding:0; }
+html,body {
+  background:var(--bg-root);color:var(--text);
+  font-family:'Space Mono','Courier New',monospace;
+  font-size:13px;min-height:100vh;
+}
+::-webkit-scrollbar{width:3px;height:3px}
+::-webkit-scrollbar-track{background:var(--bg-root)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#app { display:flex;min-height:100vh; }
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+#sidebar {
+  width:var(--sidebar-w);min-width:var(--sidebar-w);
+  background:var(--bg-surface);border-right:1px solid var(--border);
+  position:sticky;top:0;height:100vh;overflow-y:auto;flex-shrink:0;
+  display:flex;flex-direction:column;
+  transition:width 0.3s ease,min-width 0.3s ease;
+}
+#sidebar.collapsed { width:0;min-width:0;overflow:hidden; }
+
+.sb-top {
+  padding:16px 16px 0;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  padding-bottom:12px;flex-shrink:0;
+}
+.sb-logo {
+  font-size:10px;letter-spacing:.38em;color:var(--signal);font-weight:700;
+  display:flex;align-items:center;gap:7px;
+}
+.sb-logo-glyph { font-size:14px;line-height:1; }
+.sb-collapse-btn {
+  background:none;border:none;cursor:pointer;
+  color:var(--text-muted);font-size:9px;letter-spacing:.15em;
+  font-family:'Space Mono',monospace;padding:2px 4px;
+  transition:color 0.2s;
+}
+.sb-collapse-btn:hover { color:var(--signal); }
+
+/* Sidebar sections */
+.sb-section { border-bottom:1px solid var(--border); }
+.sb-section-header {
+  padding:10px 16px;display:flex;align-items:center;
+  justify-content:space-between;cursor:pointer;user-select:none;
+  transition:background 0.2s;
+}
+.sb-section-header:hover { background:var(--signal-tint); }
+.sh-label {
+  font-size:9px;letter-spacing:.38em;color:var(--text-muted);
+  text-transform:uppercase;display:flex;align-items:center;gap:8px;
+}
+.sh-dot {
+  width:5px;height:5px;border-radius:50%;background:var(--signal);
+  animation:rfpulse 1.6s ease-in-out infinite;flex-shrink:0;
+}
+.sh-dot.dot-red  { background:#e04040; }
+.sh-dot.dot-amber{ background:#f09c28; }
+.sh-arrow {
+  font-size:8px;color:var(--text-muted);
+  transition:transform 0.3s ease;display:inline-block;
+}
+.sh-arrow.open { transform:rotate(90deg); }
+
+.sb-section-body { overflow:hidden;transition:max-height 0.35s ease; }
+
+/* Sidebar rows */
+.sb-row {
+  display:flex;justify-content:space-between;align-items:flex-start;
+  padding:6px 16px;border-bottom:1px solid rgba(22,50,32,0.4);
+}
+.sb-row:last-child { border-bottom:none; }
+.rl {
+  font-size:9px;letter-spacing:.08em;color:var(--text-muted);
+  text-transform:uppercase;padding-top:1px;
+}
+.rv { font-size:12px;color:var(--text);text-align:right; }
+.rv.green { color:var(--signal); }
+.rv.active {
+  color:var(--signal);display:flex;align-items:center;gap:5px;
+}
+.rv.active::before {
+  content:'';width:6px;height:6px;border-radius:50%;
+  background:var(--signal);display:inline-block;
+  animation:rfpulse 1.6s ease-in-out infinite;
+}
+
+/* Metric grid */
+.metric-grid {
+  display:grid;grid-template-columns:1fr 1fr;gap:6px;
+  padding:10px 12px 12px;background:var(--bg-root);
+}
+.metric-tile {
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:4px;padding:10px 10px 8px;
+  transition:border-color 0.2s,background 0.2s;
+}
+.metric-tile:hover { border-color:var(--signal);background:var(--signal-tint); }
+.mt-val {
+  font-size:14px;color:var(--signal);font-weight:700;
+  display:block;line-height:1;font-family:'Orbitron',monospace;
+}
+.mt-label {
+  font-size:7px;letter-spacing:.1em;color:var(--text-muted);
+  text-transform:uppercase;display:block;margin-top:5px;
+}
+
+/* Sidebar footer */
+.sb-footer {
+  margin-top:auto;padding:12px 16px;border-top:1px solid var(--border);
+}
+.sb-theme-row {
+  display:flex;gap:6px;align-items:center;
+  font-size:8px;letter-spacing:.2em;color:var(--text-muted);
+  text-transform:uppercase;margin-bottom:8px;
+}
+.theme-swatch {
+  width:14px;height:14px;border-radius:50%;cursor:pointer;
+  border:1.5px solid transparent;transition:border-color 0.2s,transform 0.2s;
+  flex-shrink:0;
+}
+.theme-swatch:hover,.theme-swatch.active { border-color:var(--text);transform:scale(1.15); }
+.sb-uptime {
+  font-size:8px;letter-spacing:.2em;color:var(--text-muted);
+  text-transform:uppercase;text-align:center;
+}
+
+/* ── Main ────────────────────────────────────────────────────────────────── */
+#main { flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg-root); }
+
+/* ── Title area ──────────────────────────────────────────────────────────── */
+#title-area {
+  background:var(--bg-root);padding:26px 0 16px;
+  display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden;
+  border-bottom:1px solid var(--border);
+  animation:flicker 5s ease-in-out infinite;
+}
+.title-scanlines {
+  position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,
+    rgba(0,232,122,0.012) 2px,rgba(0,232,122,0.012) 4px);
+}
+.title-sweep {
+  position:absolute;left:0;width:100%;height:2px;
+  background:linear-gradient(90deg,transparent,var(--scanline-tint),transparent);
+  animation:titlesweep 3s linear infinite;pointer-events:none;z-index:2;
+}
+.title-inner { position:relative;z-index:3;text-align:center; }
+#project-title {
+  font-family:'Orbitron',monospace;font-size:clamp(28px,4.5vw,54px);
+  font-weight:900;letter-spacing:0.25em;color:var(--signal);
+  line-height:1;display:inline;
+  text-shadow:0 0 30px var(--signal-glow),0 0 60px rgba(0,232,122,0.1);
+}
+#title-cursor {
+  display:inline-block;width:3px;height:clamp(26px,4vw,48px);
+  background:var(--signal);vertical-align:bottom;margin-left:5px;
+  animation:blink .9s step-end infinite;
+  box-shadow:0 0 8px var(--signal-glow);
+}
+.title-sub {
+  font-size:8px;letter-spacing:.38em;color:var(--text-muted);
+  text-transform:uppercase;margin-top:10px;display:block;
+}
+
+/* ── Header bar ──────────────────────────────────────────────────────────── */
+.rf-header {
+  background:var(--bg-surface);border-bottom:1px solid var(--border);
+  padding:10px 24px;display:flex;align-items:center;
+  justify-content:space-between;gap:16px;
+  transition:border-left 0.4s;
+}
+body.theme-red .rf-header { border-left:3px solid #e04040; }
+.rf-logo { color:var(--signal);font-size:11px;letter-spacing:.42em;white-space:nowrap; }
+.rf-center {
+  color:var(--text-muted);font-size:7px;letter-spacing:.32em;
+  text-transform:uppercase;text-align:center;flex:1;padding:0 24px;
+}
+.rf-status { display:flex;align-items:center;gap:8px;white-space:nowrap; }
+.rf-status-text { color:var(--text);font-size:7px;letter-spacing:.28em; }
+.rf-dot {
+  width:6px;height:6px;background:var(--signal);border-radius:50%;
+  flex-shrink:0;animation:rfpulse 1.6s ease-in-out infinite;
+  box-shadow:0 0 6px var(--signal-glow);
+}
+.rf-threat {
+  color:#e04040;font-size:7px;letter-spacing:.28em;
+  animation:blink-threat 0.8s step-end infinite;white-space:nowrap;
+}
+
+/* ── Sidebar toggle (when collapsed) ──────────────────────────────────────── */
+#sb-open-btn {
+  position:fixed;left:0;top:50%;transform:translateY(-50%);
+  background:var(--bg-surface);border:1px solid var(--border);
+  border-left:none;border-radius:0 4px 4px 0;
+  color:var(--text-muted);padding:8px 5px;cursor:pointer;
+  font-size:9px;writing-mode:vertical-lr;letter-spacing:.2em;
+  font-family:'Space Mono',monospace;z-index:100;
+  display:none;transition:color 0.2s;
+}
+#sb-open-btn:hover { color:var(--signal); }
+#sidebar.collapsed ~ * #sb-open-btn { display:block; }
+
+/* ── Content ─────────────────────────────────────────────────────────────── */
+#content { padding:20px 24px;flex:1; }
+
+/* ── Tabs ────────────────────────────────────────────────────────────────── */
+.tab-bar {
+  display:flex;border-bottom:1px solid var(--border);
+  margin-bottom:20px;gap:0;
+}
+.tab-btn {
+  background:transparent;border:none;color:var(--text-muted);
+  font-size:7px;letter-spacing:.32em;text-transform:uppercase;
+  padding:9px 20px;cursor:pointer;
+  border-bottom:2px solid transparent;
+  font-family:'Space Mono',monospace;
+  transition:color 0.25s,border-color 0.25s;
+}
+.tab-btn:hover { color:var(--text); }
+.tab-btn.active { color:var(--signal);border-bottom:2px solid var(--signal); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+/* ── Panel header ────────────────────────────────────────────────────────── */
+.panel-hdr {
+  color:var(--text-muted);font-size:7px;letter-spacing:.42em;
+  text-transform:uppercase;border-bottom:1px solid var(--border);
+  padding-bottom:8px;margin-bottom:14px;display:flex;
+  align-items:center;gap:8px;
+}
+.panel-hdr::before {
+  content:'';width:3px;height:10px;background:var(--signal);
+  border-radius:1px;flex-shrink:0;
+}
+
+/* ── Upload zone ─────────────────────────────────────────────────────────── */
+.upload-row { display:flex;gap:14px;align-items:flex-start;margin-bottom:20px; }
+.upload-zone {
+  flex:1;border:1px dashed var(--border);border-radius:5px;
+  padding:22px 16px;text-align:center;cursor:pointer;
+  background:var(--bg-card);position:relative;
+  transition:border-color 0.25s,background 0.25s;
+}
+.upload-zone:hover,.upload-zone.drag-over {
+  border-color:var(--signal);background:var(--signal-tint);
+}
+.upload-zone input[type=file] { position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%; }
+.upload-icon { font-size:22px;color:var(--text-muted);margin-bottom:8px; }
+.upload-label { font-size:7px;letter-spacing:.28em;text-transform:uppercase;color:var(--text-muted); }
+.upload-sub { font-size:6.5px;letter-spacing:.18em;color:var(--border);margin-top:4px; }
+.upload-filename { font-size:8px;color:var(--signal);margin-top:6px;letter-spacing:.14em; }
+
+.threshold-box {
+  min-width:170px;background:var(--bg-card);
+  border:1px solid var(--border);border-radius:5px;padding:12px 14px;
+}
+.threshold-label { font-size:6.5px;letter-spacing:.28em;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;display:block; }
+.threshold-val { font-size:16px;color:var(--signal);display:block;margin-bottom:10px;text-align:center;font-family:'Orbitron',monospace; }
+input[type=range] {
+  width:100%;-webkit-appearance:none;background:var(--border);height:2px;border-radius:1px;outline:none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance:none;width:10px;height:10px;border-radius:50%;
+  background:var(--signal);cursor:pointer;
+}
+
+/* ── Two-panel ───────────────────────────────────────────────────────────── */
+.two-panel { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px; }
+
+/* ── Canvas waveform ─────────────────────────────────────────────────────── */
+.canvas-wrap {
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:5px 5px 0 0;overflow:hidden;height:140px;margin-bottom:0;
+}
+#waveform-canvas { display:block;width:100%;height:100%; }
+
+/* ── Waterfall spectrogram ───────────────────────────────────────────────── */
+.waterfall-wrap {
+  position:relative;border:1px solid var(--border);border-top:none;
+  border-radius:0 0 5px 5px;overflow:hidden;height:90px;margin-bottom:12px;
+  background:#000;
+}
+#waterfall-canvas { display:block;width:100%;height:100%; }
+.waterfall-labels {
+  position:absolute;right:4px;top:0;bottom:0;
+  display:flex;flex-direction:column;justify-content:space-between;
+  padding:3px 0;pointer-events:none;
+}
+.wf-label {
+  font-size:6px;letter-spacing:.1em;color:var(--text-muted);
+  font-family:'Space Mono',monospace;text-align:right;line-height:1;
+}
+.wf-label.center { color:var(--signal);opacity:.8; }
+.waterfall-title {
+  position:absolute;left:6px;top:4px;
+  font-size:6px;letter-spacing:.25em;color:var(--text-muted);
+  font-family:'Space Mono',monospace;text-transform:uppercase;
+  opacity:.7;
+}
+.wf-divider {
+  position:absolute;left:0;right:0;
+  border-top:1px dashed rgba(0,232,122,0.15);pointer-events:none;
+}
+
+/* ── Metadata grid ───────────────────────────────────────────────────────── */
+.meta-grid { display:grid;grid-template-columns:1fr 1fr;gap:6px 4px;margin-top:10px; }
+.meta-lbl { font-size:6.5px;letter-spacing:.28em;text-transform:uppercase;color:var(--text-muted); }
+.meta-val { font-size:10px;color:var(--text);text-align:right; }
+
+/* ── Result card ─────────────────────────────────────────────────────────── */
+.result-card { border-radius:5px;padding:20px 16px 16px;margin:0 0 10px;text-align:center; }
+.result-badge {
+  display:inline-block;font-size:9px;letter-spacing:.38em;text-transform:uppercase;
+  border:1px solid;border-radius:2px;padding:2px 10px;margin-bottom:10px;
+}
+.result-confval {
+  font-size:clamp(22px,4vw,36px);letter-spacing:.05em;line-height:1;
+  display:block;margin:8px 0 4px;font-family:'Orbitron',monospace;
+}
+.result-label { font-size:9px;letter-spacing:.38em;text-transform:uppercase;display:block;margin-bottom:12px; }
+.conf-bar-wrap { width:100%;height:3px;background:var(--border);border-radius:2px;margin-top:12px; }
+.conf-bar { height:3px;border-radius:2px;transition:width 0.6s ease,background 0.6s ease; }
+
+/* ── Idle / Analyzing ────────────────────────────────────────────────────── */
+.idle-card {
+  background:var(--bg-card);border:1px solid var(--border);border-radius:5px;
+  padding:40px 24px;text-align:center;color:var(--text-muted);
+  font-size:7px;letter-spacing:.38em;text-transform:uppercase;
+}
+.analyzing-card {
+  background:var(--bg-card);border:1px solid var(--border);border-radius:5px;
+  padding:28px;text-align:center;font-size:7px;letter-spacing:.38em;
+  color:var(--text-muted);text-transform:uppercase;margin:10px 0;
+}
+.scan-bar {
+  width:60%;height:2px;
+  background:linear-gradient(90deg,transparent,var(--signal),transparent);
+  margin:14px auto 0;animation:scan 1.2s ease-in-out infinite;
+}
+
+/* ── Charts ──────────────────────────────────────────────────────────────── */
+.fingerprint-section {
+  border:1px solid var(--border);border-radius:6px;
+  padding:18px 18px 14px;background:var(--bg-main);margin-bottom:18px;
+}
+.fingerprint-hdr {
+  font-size:7px;letter-spacing:.38em;color:var(--text-muted);
+  text-transform:uppercase;border-bottom:1px solid var(--border);
+  padding-bottom:9px;margin-bottom:14px;
+}
+.three-col { display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px; }
+.chart-card {
+  background:var(--bg-card);border:1px solid var(--border);
+  border-radius:4px;overflow:hidden;margin-bottom:4px;
+}
+.chart-accent { height:3px;width:100%;display:block; }
+.chart-card-body { padding:9px 12px 4px; }
+.chart-title-dot {
+  width:5px;height:5px;background:var(--signal);border-radius:50%;
+  display:inline-block;animation:rfpulse 1.6s ease-in-out infinite;
+  flex-shrink:0;margin-right:6px;vertical-align:middle;
+}
+.chart-lbl { font-size:8px;letter-spacing:.38em;text-transform:uppercase;color:var(--signal);vertical-align:middle; }
+.chart-desc { font-size:7px;color:var(--text-muted);letter-spacing:.18em;display:block;margin-top:3px; }
+.chart-container { min-height:240px; }
+
+/* ── Session log ─────────────────────────────────────────────────────────── */
+.session-wrap {
+  max-height:160px;overflow-y:auto;border:1px solid var(--border);
+  border-radius:4px;background:var(--bg-card);
+}
+.session-tbl { width:100%;border-collapse:collapse; }
+.session-tbl th {
+  font-size:6.5px;letter-spacing:.28em;text-transform:uppercase;
+  color:var(--text-muted);padding:6px 8px;background:var(--bg-surface);
+  border-bottom:1px solid var(--border);text-align:left;position:sticky;top:0;
+}
+.session-tbl td { padding:5px 8px;font-size:0.7rem;border-bottom:1px solid var(--border);color:var(--text); }
+.session-tbl tr:nth-child(even) td { background:var(--bg-surface); }
+.row-pass td { color:#00e87a!important; }
+.row-fail td { color:#e04040!important; }
+
+/* ── Tech details ────────────────────────────────────────────────────────── */
+.tech-details { border:1px solid var(--border);border-radius:4px;background:var(--bg-card);margin-bottom:18px;overflow:hidden; }
+.tech-details summary {
+  padding:9px 14px;cursor:pointer;font-size:7px;letter-spacing:.32em;
+  text-transform:uppercase;color:var(--text-muted);list-style:none;
+  display:flex;align-items:center;gap:8px;
+}
+.tech-details summary::before { content:'▶';font-size:6px; }
+.tech-details[open] summary::before { content:'▼'; }
+.tech-details-body { padding:12px 14px;border-top:1px solid var(--border); }
+.tech-tbl { width:100%;border-collapse:collapse; }
+.tech-tbl td { padding:4px 8px;font-size:0.7rem;border-bottom:1px solid var(--border);color:var(--text); }
+.tech-tbl td:first-child { color:var(--text-muted);font-size:6.5px;letter-spacing:.18em;text-transform:uppercase;width:40%; }
+
+/* ── Compare mode ────────────────────────────────────────────────────────── */
+.compare-row { display:grid;grid-template-columns:1fr 60px 1fr;gap:0;align-items:start; }
+.vs-wrap { display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:180px;gap:0; }
+.vs-line { width:1px;background:var(--border);flex:1;min-height:40px; }
+.vs-txt { color:var(--text-muted);font-size:10px;letter-spacing:.2em;padding:8px 0; }
+.compare-charts-row { display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px; }
+.cmp-tbl { width:100%;border-collapse:collapse; }
+.cmp-tbl th { font-size:6.5px;letter-spacing:.28em;text-transform:uppercase;color:var(--text-muted);padding:6px 10px;background:var(--bg-surface);border-bottom:1px solid var(--border);text-align:left; }
+.cmp-tbl td { padding:6px 10px;font-size:0.75rem;border-bottom:1px solid var(--border);color:var(--text); }
+.cmp-tbl tr:nth-child(even) td { background:var(--bg-surface); }
+
+/* ── Threat Timeline ─────────────────────────────────────────────────────── */
+#threat-timeline {
+  background:var(--bg-surface);border-bottom:1px solid var(--border);
+  padding:0 24px;height:36px;display:flex;align-items:center;gap:12px;
+  flex-shrink:0;overflow:hidden;position:relative;
+}
+.tl-label {
+  font-size:6.5px;letter-spacing:.32em;color:var(--text-muted);
+  text-transform:uppercase;white-space:nowrap;flex-shrink:0;
+  display:flex;align-items:center;gap:6px;
+}
+.tl-label::after {
+  content:'';width:1px;height:16px;background:var(--border);display:block;
+}
+.tl-track {
+  flex:1;height:100%;position:relative;overflow:hidden;
+  display:flex;align-items:center;
+}
+.tl-rail {
+  position:absolute;left:0;right:0;top:50%;
+  border-top:1px solid var(--border);transform:translateY(-50%);
+}
+.tl-events {
+  position:absolute;right:0;top:0;bottom:0;
+  display:flex;align-items:center;gap:0;
+  transition:transform 0.4s ease;
+}
+.tl-event {
+  position:relative;display:flex;flex-direction:column;
+  align-items:center;gap:3px;padding:0 10px;cursor:default;
+  flex-shrink:0;
+}
+.tl-event:hover .tl-tooltip { opacity:1;transform:translateY(-2px); }
+.tl-dot {
+  width:8px;height:8px;border-radius:50%;flex-shrink:0;
+  box-shadow:0 0 6px currentColor;
+  transition:transform 0.2s;
+}
+.tl-event:hover .tl-dot { transform:scale(1.4); }
+.tl-tick {
+  position:absolute;top:50%;width:1px;height:8px;
+  background:var(--border);transform:translateY(-50%);
+}
+.tl-ts {
+  font-size:5.5px;letter-spacing:.1em;color:var(--text-muted);
+  white-space:nowrap;margin-top:2px;font-family:'Space Mono',monospace;
+}
+.tl-tooltip {
+  position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%) translateY(0);
+  background:var(--bg-card);border:1px solid var(--border);border-radius:3px;
+  padding:4px 8px;font-size:6.5px;letter-spacing:.12em;color:var(--text);
+  white-space:nowrap;opacity:0;transition:opacity 0.2s,transform 0.2s;
+  pointer-events:none;z-index:10;font-family:'Space Mono',monospace;
+}
+.tl-tooltip::after {
+  content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);
+  border:4px solid transparent;border-top-color:var(--border);
+}
+.tl-now {
+  position:absolute;right:0;top:0;bottom:0;width:1px;
+  background:var(--signal);opacity:0.4;
+}
+.tl-empty {
+  font-size:7px;letter-spacing:.25em;color:var(--border);
+  text-transform:uppercase;position:absolute;left:50%;transform:translateX(-50%);
+  white-space:nowrap;
+}
+.tl-legend {
+  display:flex;gap:10px;align-items:center;flex-shrink:0;padding-left:8px;
+  border-left:1px solid var(--border);margin-left:4px;
+}
+.tl-leg-item {
+  display:flex;align-items:center;gap:4px;
+  font-size:6px;letter-spacing:.18em;color:var(--text-muted);text-transform:uppercase;
+}
+.tl-leg-dot { width:6px;height:6px;border-radius:50%;flex-shrink:0; }
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.rf-footer {
+  background:var(--bg-surface);border-top:1px solid var(--border);
+  padding:9px;text-align:center;font-size:7px;letter-spacing:.28em;
+  color:var(--text-muted);text-transform:uppercase;
+}
+
+/* ── #3 Radial confidence gauge ──────────────────────────────────────────── */
+.gauge-wrap {
+  display:flex;flex-direction:column;align-items:center;
+  padding:16px 0 8px;position:relative;
+}
+.gauge-svg { overflow:visible; }
+.gauge-track { fill:none;stroke:var(--border);stroke-width:8;stroke-linecap:round; }
+.gauge-arc   { fill:none;stroke-width:8;stroke-linecap:round;
+  transition:stroke-dashoffset 0.9s cubic-bezier(.4,0,.2,1),stroke 0.5s ease;
+  transform-origin:center;transform:rotate(-210deg);
+}
+.gauge-val {
+  font-family:'Orbitron',monospace;font-size:22px;font-weight:900;
+  text-anchor:middle;dominant-baseline:middle;
+}
+.gauge-sub {
+  font-family:'Space Mono',monospace;font-size:7px;letter-spacing:.3em;
+  text-anchor:middle;fill:var(--text-muted);text-transform:uppercase;
+}
+.gauge-badge-wrap { margin-top:6px;text-align:center; }
+
+/* ── #4 Keyboard shortcuts hint ──────────────────────────────────────────── */
+#kb-hint {
+  position:fixed;bottom:72px;right:24px;
+  background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:5px;padding:12px 16px;font-size:7px;letter-spacing:.15em;
+  color:var(--text-muted);text-transform:uppercase;
+  opacity:0;transform:translateY(6px);
+  transition:opacity 0.3s,transform 0.3s;pointer-events:none;z-index:999;
+  min-width:180px;
+}
+#kb-hint.show { opacity:1;transform:none; }
+.kb-row { display:flex;justify-content:space-between;align-items:center;padding:3px 0;gap:20px; }
+.kb-key {
+  background:var(--bg-card);border:1px solid var(--border);border-radius:3px;
+  padding:1px 6px;font-size:7px;color:var(--text);letter-spacing:.05em;
+  font-family:'Space Mono',monospace;
+}
+.kb-title {
+  font-size:7px;letter-spacing:.3em;color:var(--signal);
+  border-bottom:1px solid var(--border);padding-bottom:6px;
+  margin-bottom:6px;text-transform:uppercase;
+}
+#kb-toggle-btn {
+  position:fixed;bottom:24px;right:76px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;
+  color:var(--text-muted);font-size:7px;letter-spacing:.2em;padding:7px 10px;
+  cursor:pointer;font-family:'Space Mono',monospace;z-index:1000;
+  transition:color 0.2s,border-color 0.2s;text-transform:uppercase;
+}
+#kb-toggle-btn:hover { color:var(--signal);border-color:var(--signal); }
+
+/* ── #5 Session stats tiles ──────────────────────────────────────────────── */
+#session-stats {
+  display:grid;grid-template-columns:repeat(4,1fr);gap:8px;
+  margin-bottom:14px;
+}
+.stat-tile {
+  background:var(--bg-card);border:1px solid var(--border);border-radius:4px;
+  padding:10px 12px 8px;transition:border-color 0.2s;
+}
+.stat-tile:hover { border-color:var(--signal); }
+.stat-val {
+  font-family:'Orbitron',monospace;font-size:16px;font-weight:700;
+  color:var(--signal);display:block;line-height:1;
+}
+.stat-lbl {
+  font-size:6.5px;letter-spacing:.18em;color:var(--text-muted);
+  text-transform:uppercase;display:block;margin-top:5px;
+}
+
+/* ── #6 Export button ────────────────────────────────────────────────────── */
+.log-hdr-row {
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:14px;
+}
+.log-hdr-row .panel-hdr { margin-bottom:0;flex:1; }
+.export-btn {
+  background:transparent;border:1px solid var(--border);border-radius:3px;
+  color:var(--text-muted);font-size:6.5px;letter-spacing:.2em;
+  padding:4px 10px;cursor:pointer;font-family:'Space Mono',monospace;
+  text-transform:uppercase;transition:color 0.2s,border-color 0.2s;
+  white-space:nowrap;
+}
+.export-btn:hover { color:var(--signal);border-color:var(--signal); }
+.export-btn:disabled { opacity:.35;cursor:default; }
+
+/* ── #9 CRT phosphor overlay ─────────────────────────────────────────────── */
+#crt-overlay {
+  position:fixed;inset:0;pointer-events:none;z-index:9990;
+  /* Scanlines */
+  background:repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.09) 2px,
+    rgba(0,0,0,0.09) 4px
+  );
+  animation:crt-flicker 0.15s infinite;
+}
+#crt-vignette {
+  position:fixed;inset:0;pointer-events:none;z-index:9989;
+  background:radial-gradient(ellipse at center,
+    transparent 55%,
+    rgba(0,0,0,0.55) 100%
+  );
+}
+#crt-phosphor {
+  position:fixed;inset:0;pointer-events:none;z-index:9988;
+  background:radial-gradient(ellipse at center,
+    rgba(0,232,122,0.018) 0%,
+    transparent 70%
+  );
+  mix-blend-mode:screen;
+  transition:background 0.5s;
+}
+body.theme-amber #crt-phosphor { background:radial-gradient(ellipse at center,rgba(240,156,40,0.018) 0%,transparent 70%); }
+body.theme-red   #crt-phosphor { background:radial-gradient(ellipse at center,rgba(224,64,64,0.018) 0%,transparent 70%); }
+
+@keyframes crt-flicker {
+  0%   { opacity:1; }
+  50%  { opacity:0.97; }
+  51%  { opacity:1; }
+  95%  { opacity:1; }
+  96%  { opacity:0.94; }
+  100% { opacity:1; }
+}
+
+/* #9 CRT toggle button */
+#crt-toggle {
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;
+  color:var(--text-muted);font-size:7px;letter-spacing:.2em;padding:6px 10px;
+  cursor:pointer;font-family:'Space Mono',monospace;z-index:10000;
+  transition:color 0.2s,border-color 0.2s;text-transform:uppercase;
+}
+#crt-toggle:hover { color:var(--signal);border-color:var(--signal); }
+#crt-toggle.off { opacity:.4; }
+
+/* ── #11 Mobile responsive ───────────────────────────────────────────────── */
+@media (max-width:768px) {
+  #app { flex-direction:column; }
+
+  #sidebar {
+    width:100%!important;min-width:100%!important;height:auto;
+    position:fixed;bottom:0;left:0;z-index:200;
+    border-right:none;border-top:1px solid var(--border);
+    flex-direction:row;flex-wrap:wrap;overflow:hidden;
+    max-height:48px;transition:max-height 0.4s ease;
+  }
+  #sidebar.mobile-open { max-height:80vh;overflow-y:auto;flex-direction:column; }
+  #sidebar.collapsed { max-height:48px!important;width:100%!important;min-width:100%!important; }
+
+  .sb-top {
+    width:100%;border-bottom:none;padding:10px 16px;
+    border-right:1px solid var(--border);flex:1;
+  }
+  .sb-section,.sb-footer { display:none; }
+  #sidebar.mobile-open .sb-section,
+  #sidebar.mobile-open .sb-footer { display:block; }
+
+  #sb-open-btn { display:none!important; }
+
+  .sb-collapse-btn::before { content:'▲ '; }
+  #sidebar.mobile-open .sb-collapse-btn::before { content:'▼ '; }
+
+  #main { padding-bottom:56px; }
+
+  .two-panel { grid-template-columns:1fr; }
+  .three-col { grid-template-columns:1fr; }
+  .compare-row { grid-template-columns:1fr; }
+  .vs-wrap { flex-direction:row;min-height:auto;padding:8px 0; }
+  .vs-line { width:40px;height:1px; }
+  #session-stats { grid-template-columns:1fr 1fr; }
+
+  #content { padding:16px; }
+  .rf-center { display:none; }
+  #threat-timeline { padding:0 12px; }
+}
+
+/* ── #12 Device ping animation ───────────────────────────────────────────── */
+.ping-track {
+  position:relative;height:20px;margin:6px 16px 2px;
+  display:flex;align-items:center;
+}
+.ping-rail {
+  position:absolute;left:0;right:0;height:1px;
+  background:linear-gradient(90deg,var(--signal),var(--border));
+  opacity:.3;
+}
+.ping-dot {
+  position:absolute;left:0;width:6px;height:6px;border-radius:50%;
+  background:var(--signal);box-shadow:0 0 8px var(--signal-glow);
+  animation:ping-travel 2.4s ease-in-out infinite;
+}
+.ping-dot.ping-return {
+  animation:ping-return 2.4s ease-in-out infinite;
+  opacity:.4;background:var(--text-muted);box-shadow:none;
+}
+.ping-label {
+  font-size:6px;letter-spacing:.2em;color:var(--text-muted);
+  text-transform:uppercase;text-align:center;margin:0 16px 8px;
+  display:flex;justify-content:space-between;
+}
+@keyframes ping-travel {
+  0%   { left:0;  opacity:1; }
+  45%  { left:calc(100% - 6px); opacity:1; }
+  50%  { left:calc(100% - 6px); opacity:0; }
+  100% { left:calc(100% - 6px); opacity:0; }
+}
+@keyframes ping-return {
+  0%   { left:calc(100% - 6px); opacity:0; }
+  50%  { left:calc(100% - 6px); opacity:0; }
+  55%  { left:calc(100% - 6px); opacity:.4; }
+  100% { left:0; opacity:.4; }
+}
+.ping-rtt {
+  font-size:6.5px;letter-spacing:.15em;color:var(--signal);
+  text-align:center;margin:0 16px 10px;font-family:'Orbitron',monospace;
+}
+
+/* ── Messages ────────────────────────────────────────────────────────────── */
+.msg-info  { background:#0d1e2a;border:1px solid #1a3a5c;border-radius:4px;padding:10px 14px;color:#7ab8e0;font-size:7px;letter-spacing:.22em;margin:8px 0; }
+.msg-error { background:#1a0808;border:1px solid #3a1212;border-radius:4px;padding:10px 14px;color:#e04040;font-size:7px;letter-spacing:.22em;margin:8px 0; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes rfpulse    { 0%,100%{opacity:.35}50%{opacity:1} }
+@keyframes blink      { 0%,100%{opacity:1}50%{opacity:0} }
+@keyframes blink-threat{ 0%,100%{opacity:1}50%{opacity:0} }
+@keyframes scan       { 0%,100%{opacity:.3;transform:scaleX(.3)}50%{opacity:1;transform:scaleX(1)} }
+@keyframes flicker    { 0%,100%{opacity:1}92%{opacity:.97}95%{opacity:.92} }
+@keyframes threat-pulse{ 0%,100%{opacity:.6}50%{opacity:1} }
+@keyframes titlesweep { 0%{top:-2px;opacity:0}10%{opacity:.8}90%{opacity:.8}100%{top:100%;opacity:0} }
+@keyframes fadeup     { from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none} }
+@keyframes colorshift-green { 0%,100%{color:#00e87a;text-shadow:0 0 24px rgba(0,232,122,0.35)} 50%{color:#a8e0bc;text-shadow:0 0 10px rgba(0,232,122,0.12)} }
+@keyframes colorshift-amber { 0%,100%{color:#f09c28;text-shadow:0 0 24px rgba(240,156,40,0.35)} 50%{color:#e0cfa8;text-shadow:0 0 10px rgba(240,156,40,0.12)} }
+@keyframes colorshift-red   { 0%,100%{color:#e04040;text-shadow:0 0 24px rgba(224,64,64,0.35)}  50%{color:#e0a8a8;text-shadow:0 0 10px rgba(224,64,64,0.12)} }
+
+#project-title { animation:colorshift-green 3s ease-in-out infinite; }
+body.theme-amber #project-title { animation:colorshift-amber 3s ease-in-out infinite; }
+body.theme-red   #project-title { animation:colorshift-red   3s ease-in-out infinite; }
+
+/* Plotly */
+.js-plotly-plot { border:1px solid var(--border)!important;border-radius:4px; }
+
+/* Notification toast */
+#toast {
+  position:fixed;bottom:24px;right:24px;
+  background:var(--bg-surface);border:1px solid var(--signal);
+  border-radius:4px;padding:10px 16px;font-size:8px;letter-spacing:.2em;
+  color:var(--signal);text-transform:uppercase;
+  opacity:0;transform:translateY(8px);
+  transition:opacity 0.3s,transform 0.3s;pointer-events:none;z-index:1000;
+}
+#toast.show { opacity:1;transform:none; }
+  </style>
+</head>
+<body>
+<div id="toast"></div>
+
+<div id="app">
+
+<!-- ── Sidebar ──────────────────────────────────────────────────────────── -->
+<aside id="sidebar">
+
+  <div class="sb-top">
+    <span class="sb-logo"><span class="sb-logo-glyph">◈</span> RFFPLA</span>
+    <button class="sb-collapse-btn" onclick="toggleSidebar()">◀ HIDE</button>
+  </div>
+
+  <!-- System Status -->
+  <div class="sb-section" id="section-status">
+    <div class="sb-section-header" onclick="toggleSection('status')">
+      <span class="sh-label"><span class="sh-dot" id="dot-status"></span>SYSTEM STATUS</span>
+      <span class="sh-arrow open" id="arrow-status">▶</span>
+    </div>
+    <div class="sb-section-body" id="body-status">
+      <div class="sb-row">
+        <span class="rl">State</span>
+        <span class="rv green" id="sys-state-val">SYSTEM ARMED</span>
+      </div>
+      <div class="sb-row">
+        <span class="rl">Uptime</span>
+        <span class="rv" id="uptime-val">00:00:00</span>
+      </div>
+      <div class="sb-row">
+        <span class="rl">Last auth</span>
+        <span class="rv" id="last-auth-val">—</span>
+      </div>
+      <div class="sb-row">
+        <span class="rl">Sessions</span>
+        <span class="rv" id="session-count-val">0</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Enrolled Device -->
+  <div class="sb-section" id="section-device">
+    <div class="sb-section-header" onclick="toggleSection('device')">
+      <span class="sh-label"><span class="sh-dot"></span>ENROLLED DEVICE</span>
+      <span class="sh-arrow open" id="arrow-device">▶</span>
+    </div>
+    <div class="sb-section-body" id="body-device">
+      <div class="sb-row"><span class="rl">Node</span><span class="rv">ESP32+CC1101</span></div>
+      <div class="sb-row"><span class="rl">Frequency</span><span class="rv">433.92 MHz</span></div>
+      <div class="sb-row"><span class="rl">Modulation</span><span class="rv">OOK</span></div>
+      <div class="sb-row"><span class="rl">Status</span><span class="rv active">ACTIVE</span></div>
+    </div>
+  </div>
+
+  <!-- Model Performance -->
+  <div class="sb-section" id="section-model">
+    <div class="sb-section-header" onclick="toggleSection('model')">
+      <span class="sh-label"><span class="sh-dot"></span>MODEL PERFORMANCE</span>
+      <span class="sh-arrow open" id="arrow-model">▶</span>
+    </div>
+    <div class="sb-section-body" id="body-model">
+      <div class="metric-grid">
+        <div class="metric-tile"><span class="mt-val">100%</span><span class="mt-label">Accuracy</span></div>
+        <div class="metric-tile"><span class="mt-val">≈38k</span><span class="mt-label">Params</span></div>
+        <div class="metric-tile"><span class="mt-val">3ch</span><span class="mt-label">Channels</span></div>
+        <div class="metric-tile"><span class="mt-val">1024</span><span class="mt-label">Window</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sidebar footer -->
+  <div class="sb-footer">
+    <!-- #12 Device ping -->
+    <div class="ping-label"><span>ESP32</span><span>SYSTEM</span></div>
+    <div class="ping-track">
+      <div class="ping-rail"></div>
+      <div class="ping-dot"></div>
+      <div class="ping-dot ping-return"></div>
+    </div>
+    <div class="ping-rtt" id="ping-rtt">RTT: — ms</div>
+    <div class="sb-theme-row">
+      <span>THEME</span>
+      <div class="theme-swatch active" style="background:#00e87a;" title="Green" onclick="applyTheme('green',this)"></div>
+      <div class="theme-swatch" style="background:#f09c28;" title="Amber" onclick="applyTheme('amber',this)"></div>
+      <div class="theme-swatch" style="background:#e04040;" title="Red"   onclick="applyTheme('red',this)"></div>
+    </div>
+    <div class="sb-uptime" id="live-clock-sb">00:00:00</div>
+  </div>
+
+</aside>
+
+<!-- sidebar open btn when collapsed -->
+<button id="sb-open-btn" onclick="toggleSidebar()" title="Open sidebar">◈ RFFPLA</button>
+
+<!-- ── Main ─────────────────────────────────────────────────────────────── -->
+<main id="main">
+
+  <!-- Title -->
+  <div id="title-area">
+    <div class="title-scanlines"></div>
+    <div class="title-sweep"></div>
+    <div class="title-inner">
+      <div>
+        <span id="project-title"></span><span id="title-cursor"></span>
+      </div>
+      <span class="title-sub">RF Fingerprinting · Physical Layer Authentication · HKR 2026</span>
+    </div>
+  </div>
+
+  <!-- Header bar -->
+  <div class="rf-header">
+    <span class="rf-logo">◈ RFFPLA</span>
+    <span class="rf-center">RF Physical Layer Authentication</span>
+    <div class="rf-status">
+      <span id="threat-label" class="rf-threat" style="display:none;">◈ THREAT DETECTED</span>
+      <span class="rf-dot" id="header-dot"></span>
+      <span class="rf-status-text">ONLINE</span>
+      <span class="rf-status-text" id="live-clock">00:00:00</span>
+    </div>
+  </div>
+
+  <!-- Threat Timeline -->
+  <div id="threat-timeline">
+    <div class="tl-label">◈ AUTH TIMELINE</div>
+    <div class="tl-track" id="tl-track">
+      <div class="tl-rail"></div>
+      <div class="tl-events" id="tl-events">
+        <span class="tl-empty" id="tl-empty">NO AUTH EVENTS THIS SESSION</span>
+      </div>
+      <div class="tl-now"></div>
+    </div>
+    <div class="tl-legend">
+      <div class="tl-leg-item"><div class="tl-leg-dot" style="background:#00e87a;box-shadow:0 0 4px #00e87a;"></div>PASS</div>
+      <div class="tl-leg-item"><div class="tl-leg-dot" style="background:#f09c28;box-shadow:0 0 4px #f09c28;"></div>UNCERTAIN</div>
+      <div class="tl-leg-item"><div class="tl-leg-dot" style="background:#e04040;box-shadow:0 0 4px #e04040;"></div>FAIL</div>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div id="content">
+
+    <!-- Tabs -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="auth">◈&nbsp; AUTHENTICATION</button>
+      <button class="tab-btn" data-tab="compare">◈&nbsp; COMPARE MODE</button>
+    </div>
+
+    <!-- AUTH TAB -->
+    <div id="tab-auth" class="tab-content active">
+
+      <div class="upload-row">
+        <div class="upload-zone" id="drop-zone">
+          <input type="file" id="file-input" accept=".c64">
+          <div class="upload-icon">⬆</div>
+          <div class="upload-label">Drop .c64 file here or click to browse</div>
+          <div class="upload-sub">5–12 second recording recommended · Max 200 MB</div>
+          <div class="upload-filename" id="upload-fname"></div>
+        </div>
+        <div class="threshold-box">
+          <span class="threshold-label">Confidence Threshold</span>
+          <span class="threshold-val" id="thr-display">70%</span>
+          <input type="range" id="threshold" min="50" max="95" step="5" value="70">
+        </div>
+      </div>
+
+      <div id="auth-msg"></div>
+
+      <div id="analyzing-card" class="analyzing-card" style="display:none;">
+        ⟳ &nbsp; ANALYZING SIGNAL
+        <div class="scan-bar"></div>
+      </div>
+
+      <div class="two-panel" id="auth-panels">
+        <div>
+          <div class="panel-hdr">SIGNAL MONITOR</div>
+          <div class="canvas-wrap">
+            <canvas id="waveform-canvas"></canvas>
+          </div>
+          <div class="waterfall-wrap">
+            <canvas id="waterfall-canvas"></canvas>
+            <div class="waterfall-title">SPECTROGRAM · 433.92 MHz ± 500 kHz</div>
+            <div class="waterfall-labels">
+              <span class="wf-label">+500k</span>
+              <span class="wf-label">+250k</span>
+              <span class="wf-label center">433.92</span>
+              <span class="wf-label">-250k</span>
+              <span class="wf-label">-500k</span>
+            </div>
+            <div class="wf-divider" style="top:50%;"></div>
+          </div>
+          <div class="meta-grid">
+            <span class="meta-lbl">FREQUENCY</span><span class="meta-val">433.92 MHz</span>
+            <span class="meta-lbl">MODULATION</span><span class="meta-val">OOK</span>
+            <span class="meta-lbl">SAMPLE RATE</span><span class="meta-val">2.0 Msps</span>
+            <span class="meta-lbl">BURSTS</span><span class="meta-val" id="burst-count">—</span>
+          </div>
+        </div>
+        <div>
+          <div class="panel-hdr">AUTHENTICATION RESULT</div>
+          <div id="auth-result-panel">
+            <div class="idle-card">
+              AWAITING SIGNAL INPUT
+              <span style="color:var(--border);font-size:32px;display:block;margin-top:12px;">○</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="fingerprint-section" id="charts-section" style="display:none;">
+        <div class="fingerprint-hdr">◈ SIGNAL FINGERPRINT ANALYSIS</div>
+        <div class="three-col">
+          <div>
+            <div class="chart-card">
+              <span class="chart-accent" id="amp-accent" style="background:var(--signal);"></span>
+              <div class="chart-card-body">
+                <span class="chart-title-dot"></span>
+                <span class="chart-lbl">AMPLITUDE ENVELOPE</span>
+                <span class="chart-desc">Burst power over time · 433.92 MHz · 2 Msps</span>
+              </div>
+            </div>
+            <div class="chart-container" id="chart-amp"></div>
+          </div>
+          <div>
+            <div class="chart-card">
+              <span class="chart-accent" style="background:#f09c28;"></span>
+              <div class="chart-card-body">
+                <span class="chart-title-dot" style="background:#f09c28;"></span>
+                <span class="chart-lbl" style="color:#f09c28;">I / Q CHANNELS</span>
+                <span class="chart-desc">In-phase vs quadrature component separation</span>
+              </div>
+            </div>
+            <div class="chart-container" id="chart-iq"></div>
+          </div>
+          <div>
+            <div class="chart-card">
+              <span class="chart-accent" id="conf-accent" style="background:var(--text-muted);"></span>
+              <div class="chart-card-body">
+                <span class="chart-title-dot" id="conf-dot" style="background:var(--text-muted);"></span>
+                <span class="chart-lbl" id="conf-lbl" style="color:var(--text-muted);">PER-BURST CONFIDENCE</span>
+                <span class="chart-desc">Classifier score per extracted burst</span>
+              </div>
+            </div>
+            <div class="chart-container" id="chart-conf"></div>
+          </div>
+        </div>
+      </div>
+
+      <details class="tech-details" id="tech-details" style="display:none;">
+        <summary>Technical Details</summary>
+        <div class="tech-details-body">
+          <table class="tech-tbl" id="tech-tbl"></table>
+        </div>
+      </details>
+
+      <br>
+      <div class="log-hdr-row">
+        <div class="panel-hdr">SESSION LOG</div>
+        <button class="export-btn" id="export-btn" onclick="exportCSV()" disabled>⬇ EXPORT CSV</button>
+      </div>
+      <div id="session-stats" style="display:none;">
+        <div class="stat-tile"><span class="stat-val" id="stat-total">0</span><span class="stat-lbl">Total Auths</span></div>
+        <div class="stat-tile"><span class="stat-val" id="stat-pass-rate">—</span><span class="stat-lbl">Pass Rate</span></div>
+        <div class="stat-tile"><span class="stat-val" id="stat-avg-conf">—</span><span class="stat-lbl">Avg Confidence</span></div>
+        <div class="stat-tile"><span class="stat-val" id="stat-best">—</span><span class="stat-lbl">Peak Confidence</span></div>
+      </div>
+      <div id="session-log">
+        <div class="idle-card" style="padding:12px 8px;">NO ENTRIES THIS SESSION</div>
+      </div>
+
+    </div><!-- /tab-auth -->
+
+    <!-- COMPARE TAB -->
+    <div id="tab-compare" class="tab-content">
+      <div class="compare-row">
+        <div>
+          <div class="panel-hdr">SIGNAL A</div>
+          <div class="upload-zone" id="drop-zone-a">
+            <input type="file" id="file-input-a" accept=".c64">
+            <div class="upload-icon">⬆</div>
+            <div class="upload-label">Signal A — authorized device</div>
+            <div class="upload-sub">Drop .c64 file or click</div>
+            <div class="upload-filename" id="fname-a"></div>
+          </div>
+        </div>
+        <div class="vs-wrap"><div class="vs-line"></div><div class="vs-txt">VS</div><div class="vs-line"></div></div>
+        <div>
+          <div class="panel-hdr">SIGNAL B</div>
+          <div class="upload-zone" id="drop-zone-b">
+            <input type="file" id="file-input-b" accept=".c64">
+            <div class="upload-icon">⬆</div>
+            <div class="upload-label">Signal B — rogue / unknown device</div>
+            <div class="upload-sub">Drop .c64 file or click</div>
+            <div class="upload-filename" id="fname-b"></div>
+          </div>
+        </div>
+      </div>
+      <div id="cmp-msg" style="margin:12px 0;"></div>
+      <div id="cmp-analyzing" class="analyzing-card" style="display:none;">⟳ &nbsp; ANALYSING BOTH SIGNALS<div class="scan-bar"></div></div>
+      <div id="cmp-threshold-row" style="display:none;margin-bottom:12px;">
+        <div class="threshold-box" style="display:inline-flex;align-items:center;gap:14px;width:auto;">
+          <span class="threshold-label" style="margin-bottom:0;">Confidence Threshold</span>
+          <span class="threshold-val" id="cmp-thr-display" style="margin-bottom:0;font-size:14px;">70%</span>
+          <input type="range" id="cmp-threshold" min="50" max="95" step="5" value="70" style="width:120px;">
+        </div>
+      </div>
+      <div id="cmp-results" style="display:none;">
+        <div class="compare-row" style="margin-bottom:14px;">
+          <div id="cmp-card-a"></div>
+          <div class="vs-wrap"><div class="vs-line"></div><div class="vs-txt">VS</div><div class="vs-line"></div></div>
+          <div id="cmp-card-b"></div>
+        </div>
+        <div class="panel-hdr">AMPLITUDE OVERLAY</div>
+        <div id="chart-overlay" style="margin-bottom:14px;"></div>
+        <div class="panel-hdr">I / Q CHANNELS</div>
+        <div class="compare-charts-row" style="margin-bottom:14px;">
+          <div id="chart-iq-a"></div>
+          <div id="chart-iq-b"></div>
+        </div>
+        <div class="panel-hdr">COMPARISON SUMMARY</div>
+        <table class="cmp-tbl" id="cmp-summary-tbl">
+          <thead><tr><th>METRIC</th><th>SIGNAL A</th><th>SIGNAL B</th></tr></thead>
+          <tbody id="cmp-summary-body"></tbody>
+        </table>
+      </div>
+    </div><!-- /tab-compare -->
+
+  </div><!-- /content -->
+
+  <div class="rf-footer">RFFPLA &nbsp;·&nbsp; HKR 2026 &nbsp;·&nbsp; v2+features 3ch &nbsp;·&nbsp; 100.00% HELD-OUT ACCURACY</div>
+</main>
+</div>
+
+<!-- #9 CRT overlay -->
+<div id="crt-overlay"></div>
+<div id="crt-vignette"></div>
+<div id="crt-phosphor"></div>
+
+<!-- Keyboard shortcuts hint -->
+<button id="kb-toggle-btn" onclick="toggleKbHint()" title="Keyboard shortcuts">⌨ KEYS</button>
+<div id="kb-hint">
+  <div class="kb-title">Keyboard Shortcuts</div>
+  <div class="kb-row"><span class="kb-key">Space</span><span>Trigger auth (demo)</span></div>
+  <div class="kb-row"><span class="kb-key">C</span><span>Compare tab</span></div>
+  <div class="kb-row"><span class="kb-key">A</span><span>Auth tab</span></div>
+  <div class="kb-row"><span class="kb-key">T</span><span>Cycle theme</span></div>
+  <div class="kb-row"><span class="kb-key">S</span><span>Collapse sidebar</span></div>
+  <div class="kb-row"><span class="kb-key">E</span><span>Export session CSV</span></div>
+  <div class="kb-row"><span class="kb-key">?</span><span>Toggle this panel</span></div>
+</div>
+
+<script>
+/* ── Theme colors ─────────────────────────────────────────────────────────── */
+const THEMES = {
+  green: { signal:'#00e87a', bgCard:'#0d1e15', bgRoot:'#030a06', border:'#163220', text:'#a8e0bc', textMuted:'#366048' },
+  amber: { signal:'#f09c28', bgCard:'#1a1205', bgRoot:'#080601', border:'#3a2a0a', text:'#e0cfa8', textMuted:'#6b4e10' },
+  red:   { signal:'#e04040', bgCard:'#1a0808', bgRoot:'#080202', border:'#3a1212', text:'#e0a8a8', textMuted:'#6b2020' },
+};
+
+/* ── State ───────────────────────────────────────────────────────────────── */
+let currentTheme = 'green';
+let canvasMode   = 'idle';
+let waveOffset   = 0;
+let sessionLog   = [];
+let sessionCount = 0;
+let uptimeStart  = Date.now();
+const BITS = [1,0,1,1,0,1,0,0,1,1,0,1];
+
+/* ── Clock ───────────────────────────────────────────────────────────────── */
+function updateClock() {
+  const now = new Date();
+  const t   = now.toTimeString().slice(0,8);
+  document.getElementById('live-clock').textContent = t;
+  document.getElementById('live-clock-sb').textContent = t;
+  // uptime
+  const s = Math.floor((Date.now() - uptimeStart) / 1000);
+  const hh = String(Math.floor(s/3600)).padStart(2,'0');
+  const mm = String(Math.floor((s%3600)/60)).padStart(2,'0');
+  const ss = String(s%60).padStart(2,'0');
+  document.getElementById('uptime-val').textContent = `${hh}:${mm}:${ss}`;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+/* ── Typing title ────────────────────────────────────────────────────────── */
+(function() {
+  const TITLE_TEXT = 'PROJECT_RFFPLA';
+  const el = document.getElementById('project-title');
+  let idx = 0, deleting = false;
+  function typeTitle() {
+    el.textContent = TITLE_TEXT.slice(0, idx);
+    if (!deleting) {
+      idx++;
+      if (idx > TITLE_TEXT.length) {
+        deleting = true;
+        setTimeout(typeTitle, 3000);
+        return;
+      }
+      setTimeout(typeTitle, 80);
+    } else {
+      idx--;
+      if (idx < 0) {
+        deleting = false;
+        idx = 0;
+        setTimeout(typeTitle, 400);
+        return;
+      }
+      setTimeout(typeTitle, 45);
+    }
+  }
+  setTimeout(typeTitle, 500);
+})();
+
+/* ── Collapsible sidebar sections ────────────────────────────────────────── */
+const sectionState = { status: true, device: true, model: true };
+
+function toggleSection(id) {
+  const body  = document.getElementById('body-' + id);
+  const arrow = document.getElementById('arrow-' + id);
+  const open  = sectionState[id];
+  sectionState[id] = !open;
+
+  if (open) {
+    body.style.maxHeight = '0px';
+    body.style.overflow  = 'hidden';
+    arrow.classList.remove('open');
+  } else {
+    body.style.maxHeight = body.scrollHeight + 200 + 'px';
+    body.style.overflow  = 'visible';
+    arrow.classList.add('open');
+  }
+}
+
+// Initialize heights
+document.querySelectorAll('.sb-section-body').forEach(b => {
+  b.style.maxHeight = '600px';
+  b.style.overflow  = 'visible';
+});
+
+/* ── Sidebar collapse ────────────────────────────────────────────────────── */
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  const btn = document.getElementById('sb-open-btn');
+  sb.classList.toggle('collapsed');
+  btn.style.display = sb.classList.contains('collapsed') ? 'block' : 'none';
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────────────── */
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  });
+});
+
+/* ── Sliders ─────────────────────────────────────────────────────────────── */
+const thrSlider  = document.getElementById('threshold');
+const thrDisplay = document.getElementById('thr-display');
+thrSlider.addEventListener('input', () => { thrDisplay.textContent = thrSlider.value + '%'; });
+
+const cmpThrSlider  = document.getElementById('cmp-threshold');
+const cmpThrDisplay = document.getElementById('cmp-thr-display');
+cmpThrSlider.addEventListener('input', () => { cmpThrDisplay.textContent = cmpThrSlider.value + '%'; });
+
+/* ── Drop zones ──────────────────────────────────────────────────────────── */
+function setupDropZone(zoneId, inputId, onFile) {
+  const zone  = document.getElementById(zoneId);
+  const input = document.getElementById(inputId);
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0]; if (file) onFile(file);
+  });
+  input.addEventListener('change', () => { if (input.files[0]) onFile(input.files[0]); });
+}
+
+setupDropZone('drop-zone', 'file-input', runPredict);
+
+/* ── Auth predict ────────────────────────────────────────────────────────── */
+async function runPredict(file) {
+  document.getElementById('upload-fname').textContent = file.name;
+  document.getElementById('auth-msg').innerHTML = '';
+  document.getElementById('analyzing-card').style.display = 'block';
+  document.getElementById('charts-section').style.display = 'none';
+  document.getElementById('tech-details').style.display = 'none';
+  document.getElementById('auth-result-panel').innerHTML =
+    '<div class="idle-card">AWAITING SIGNAL INPUT<span style="color:var(--border);font-size:32px;display:block;margin-top:12px;">○</span></div>';
+
+  canvasMode = 'idle';
+  await delay(900);
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  let data;
+  try {
+    const res = await fetch('/predict', { method:'POST', body:fd });
+    if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`); }
+    data = await res.json();
+  } catch (err) {
+    document.getElementById('analyzing-card').style.display = 'none';
+    showMsg('auth-msg','error', err.message || 'Network error — is server.py running?');
+    return;
+  }
+
+  document.getElementById('analyzing-card').style.display = 'none';
+  if (data.error) { showMsg('auth-msg','error',data.error); return; }
+  showResult(data, file.name);
+}
+
+function showResult(data, fileName) {
+  const conf  = data.confidence;
+  const thr   = parseFloat(thrSlider.value);
+  const theme = confToTheme(conf);
+  applyTheme(theme);
+
+  canvasMode = conf >= 85 ? 'authorized' : conf >= 50 ? 'uncertain' : 'denied';
+
+  document.getElementById('burst-count').textContent = data.n_bursts;
+
+  const { color, icon, label, badge } = confToStyle(conf);
+  const barW = Math.min(100, conf).toFixed(1);
+  sessionCount++;
+  const sessionId = 'AUTH_S' + sessionCount;
+  document.getElementById('session-count-val').textContent = sessionCount;
+
+  const now = new Date();
+  document.getElementById('last-auth-val').textContent = now.toTimeString().slice(0,8);
+
+  document.getElementById('auth-result-panel').innerHTML = `
+    <div class="result-card" style="background:${color}1a;border:1px solid ${color}55;text-align:center;padding:12px 16px;">
+      ${buildGauge(conf, color)}
+      <span class="result-label" style="color:${color};margin-top:6px;display:block;">${icon} ${label}</span>
+      <div class="meta-grid" style="margin-top:10px;text-align:left;">
+        <span class="meta-lbl">DEVICE</span><span class="meta-val">CC1101 + ESP32</span>
+        <span class="meta-lbl">SESSION</span><span class="meta-val">${sessionId}</span>
+        <span class="meta-lbl">MODEL</span><span class="meta-val">v2+features 3ch</span>
+        <span class="meta-lbl">ACCURACY</span><span class="meta-val">100.00%</span>
+      </div>
+    </div>`;
+
+  // #3 + #8: animate gauge and count-up after DOM settles
+  requestAnimationFrame(() => animateGauge(conf, color));
+  // #10: play auth sound
+  playAuthSound(conf);
+
+  document.getElementById('charts-section').style.display = 'block';
+  drawAmpChart(data.amp, theme, 'chart-amp');
+  drawIQChart(data.i_ch, data.q_ch, theme, 'chart-iq');
+  drawConfChart(data.probs, thr, theme, 'chart-conf');
+  // #7: attach burst scrubber after chart renders
+  setTimeout(() => attachBurstScrubber(data.n_bursts), 400);
+
+  const td = document.getElementById('tech-details');
+  td.style.display = 'block';
+  document.getElementById('tech-tbl').innerHTML = `
+    <tr><td>File</td><td>${fileName}</td></tr>
+    <tr><td>Duration</td><td>~${data.duration_s} s</td></tr>
+    <tr><td>Bursts extracted</td><td>${data.n_windows}</td></tr>
+    <tr><td>Sample count</td><td>${data.n_samples.toLocaleString()}</td></tr>
+    <tr><td>Average score</td><td>${(data.confidence / 100).toFixed(4)}</td></tr>
+    <tr><td>Std dev</td><td>${data.std.toFixed(2)}%</td></tr>
+    <tr><td>Threshold</td><td>${thr}%</td></tr>`;
+
+  const result = (conf >= thr && conf >= 50) ? 'PASS' : 'FAIL';
+  sessionLog.unshift([data.timestamp, fileName, result, conf.toFixed(1)+'%', data.n_bursts]);
+  renderSessionLog();
+  updateStats(conf, result);                        // #5
+  document.getElementById('export-btn').disabled = false;  // #6
+  pushTimelineEvent(conf, fileName, data.timestamp);
+  showToast(result === 'PASS' ? '✓ AUTH PASS · ' + conf.toFixed(1)+'%' : '✗ AUTH FAIL · ' + conf.toFixed(1)+'%');
+}
+
+/* ── Compare ─────────────────────────────────────────────────────────────── */
+let cmpFiles = { file_a:null, file_b:null };
+setupDropZone('drop-zone-a','file-input-a', f => { cmpFiles.file_a=f; document.getElementById('fname-a').textContent=f.name; tryCompare(); });
+setupDropZone('drop-zone-b','file-input-b', f => { cmpFiles.file_b=f; document.getElementById('fname-b').textContent=f.name; tryCompare(); });
+
+async function tryCompare() {
+  if (!cmpFiles.file_a || !cmpFiles.file_b) return;
+  document.getElementById('cmp-msg').innerHTML = '';
+  document.getElementById('cmp-results').style.display = 'none';
+  document.getElementById('cmp-threshold-row').style.display = 'none';
+  document.getElementById('cmp-analyzing').style.display = 'block';
+
+  const fd = new FormData();
+  fd.append('file_a', cmpFiles.file_a);
+  fd.append('file_b', cmpFiles.file_b);
+
+  let data;
+  try {
+    const res = await fetch('/predict_compare', { method:'POST', body:fd });
+    if (!res.ok) { const t = await res.text(); throw new Error(`HTTP ${res.status}: ${t.slice(0,200)}`); }
+    data = await res.json();
+  } catch (err) {
+    document.getElementById('cmp-analyzing').style.display = 'none';
+    showMsg('cmp-msg','error', err.message || 'Network error');
+    return;
+  }
+
+  document.getElementById('cmp-analyzing').style.display = 'none';
+  if (data.error) { showMsg('cmp-msg','error',data.error); return; }
+
+  const ra = data.file_a, rb = data.file_b;
+  if (ra.error) showMsg('cmp-msg','error','Signal A: '+ra.error);
+  if (rb.error) showMsg('cmp-msg','error','Signal B: '+rb.error);
+  if (ra.error || rb.error) return;
+
+  const thr = parseFloat(cmpThrSlider.value);
+  document.getElementById('cmp-card-a').innerHTML = buildCmpCard('Signal A', ra, thr);
+  document.getElementById('cmp-card-b').innerHTML = buildCmpCard('Signal B', rb, thr);
+  document.getElementById('cmp-threshold-row').style.display = 'block';
+  document.getElementById('cmp-results').style.display = 'block';
+
+  drawOverlayChart(ra.amp, rb.amp, 'chart-overlay');
+  drawIQChart(ra.i_ch, ra.q_ch, confToTheme(ra.confidence), 'chart-iq-a', 'Signal A — I / Q');
+  drawIQChart(rb.i_ch, rb.q_ch, confToTheme(rb.confidence), 'chart-iq-b', 'Signal B — I / Q');
+  buildCmpSummary(ra, rb, cmpFiles.file_a.name, cmpFiles.file_b.name, thr);
+}
+
+function buildCmpCard(lbl, d, thr) {
+  const { color, icon, badge, label } = confToStyle(d.confidence);
+  const barW = Math.min(100,d.confidence).toFixed(1);
+  return `<div class="panel-hdr">${lbl.toUpperCase()}</div>
+    <div class="result-card" style="background:${color}1a;border:1px solid ${color}55;">
+      <span class="result-badge" style="color:${color};border-color:${color}66;background:${color}1a;">${badge}</span>
+      <span class="result-confval" style="color:${color};">${d.confidence.toFixed(1)}%</span>
+      <span class="result-label" style="color:${color};">${icon} ${label}</span>
+      <div class="conf-bar-wrap"><div class="conf-bar" style="width:${barW}%;background:${color};"></div></div>
+    </div>
+    <div class="meta-grid">
+      <span class="meta-lbl">BURSTS</span><span class="meta-val">${d.n_bursts}</span>
+      <span class="meta-lbl">STD DEV</span><span class="meta-val">${d.std.toFixed(1)}%</span>
+    </div>`;
+}
+
+function buildCmpSummary(ra, rb, fnA, fnB, thr) {
+  const dec = c => c >= thr && c >= 50 ? 'PASS' : c < thr ? 'LOW CONF' : 'FAIL';
+  const rows = [
+    ['Confidence', ra.confidence.toFixed(1)+'%', rb.confidence.toFixed(1)+'%'],
+    ['Decision', dec(ra.confidence), dec(rb.confidence)],
+    ['Bursts extracted', ra.n_windows, rb.n_windows],
+    ['Burst std dev', ra.std.toFixed(1)+'%', rb.std.toFixed(1)+'%'],
+    ['Duration', '~'+ra.duration_s+' s', '~'+rb.duration_s+' s'],
+  ];
+  document.getElementById('cmp-summary-body').innerHTML =
+    rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td></tr>`).join('');
+}
+
+/* ── Canvas waveform ─────────────────────────────────────────────────────── */
+(function() {
+  const cvs = document.getElementById('waveform-canvas');
+  const ctx = cvs.getContext('2d');
+  function resize() { cvs.width=cvs.offsetWidth||400; cvs.height=cvs.offsetHeight||160; }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function draw() {
+    const t = THEMES[currentTheme];
+    const W = cvs.width, H = cvs.height;
+    ctx.fillStyle = t.bgCard;
+    ctx.fillRect(0,0,W,H);
+    for (let y=0;y<H;y+=3) { ctx.fillStyle='rgba(0,0,0,0.1)'; ctx.fillRect(0,y,W,1); }
+
+    ctx.beginPath();
+    ctx.strokeStyle = t.signal;
+    ctx.lineWidth   = 1.5;
+    ctx.shadowColor = t.signal;
+    ctx.shadowBlur  = 5;
+
+    const highY=H*.25, lowY=H*.75, midY=H*.5;
+
+    if (canvasMode === 'idle') {
+      ctx.strokeStyle = t.border; ctx.shadowBlur=2;
+      ctx.moveTo(0,midY); ctx.lineTo(W,midY); ctx.stroke();
+      ctx.beginPath(); ctx.strokeStyle=t.signal+'55'; ctx.lineWidth=1;
+      const cx=waveOffset%W; ctx.moveTo(cx,0); ctx.lineTo(cx,H); ctx.stroke();
+    } else if (canvasMode === 'denied') {
+      for (let x=0;x<=W;x++) {
+        const t2=(x+waveOffset)*.013;
+        const y=midY+H*.16*Math.sin(t2*7.3)+H*.11*Math.sin(t2*11.17)+H*.08*Math.sin(t2*19.73);
+        x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    } else {
+      const segW=W/BITS.length, off=waveOffset%segW, base=Math.floor(waveOffset/segW);
+      let prevY=null;
+      for (let i=-1;i<=BITS.length+1;i++) {
+        const idx=((base+i)%BITS.length+BITS.length)%BITS.length;
+        let bit=BITS[idx];
+        if (canvasMode==='uncertain' && Math.sin(idx*127.1)>0.52) bit=0.5;
+        const y=bit===1?highY:bit===0.5?midY:lowY;
+        const x1=i*segW-off, x2=x1+segW;
+        if (x2<0||x1>W) continue;
+        const dx1=Math.max(0,x1), dx2=Math.min(W,x2);
+        if (prevY===null) ctx.moveTo(dx1,y);
+        else if (prevY!==y) ctx.lineTo(dx1,y);
+        ctx.lineTo(dx2,y);
+        prevY=y;
+      }
+      ctx.stroke();
+    }
+    waveOffset+=1.5;
+    requestAnimationFrame(draw);
+  }
+  draw();
+})();
+
+/* ── Waterfall spectrogram ───────────────────────────────────────────────── */
+(function() {
+  const cvs = document.getElementById('waterfall-canvas');
+  const ctx  = cvs.getContext('2d');
+  let W, H, offscreen, offCtx;
+
+  function resize() {
+    W = cvs.offsetWidth  || 500;
+    H = cvs.offsetHeight || 90;
+    cvs.width  = W;
+    cvs.height = H;
+    // offscreen buffer for scrolling
+    offscreen       = document.createElement('canvas');
+    offscreen.width  = W;
+    offscreen.height = H;
+    offCtx = offscreen.getContext('2d');
+    offCtx.fillStyle = '#000';
+    offCtx.fillRect(0, 0, W, H);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Generate a column of frequency-domain power values (BINS values, 0-1)
+  function genColumn(mode, t) {
+    const BINS = H;
+    const col  = new Float32Array(BINS);
+    const mid  = Math.floor(BINS / 2);
+
+    if (mode === 'idle') {
+      // Noise floor only — tiny random speckle
+      for (let b = 0; b < BINS; b++) {
+        col[b] = Math.random() * 0.06;
+      }
+      // Faint carrier ghost
+      const spread = 2;
+      for (let d = -spread; d <= spread; d++) {
+        const idx = mid + d;
+        if (idx >= 0 && idx < BINS)
+          col[idx] += 0.08 * (1 - Math.abs(d) / spread);
+      }
+
+    } else if (mode === 'authorized') {
+      // Clean OOK burst: sharp carrier peak + noise floor
+      const burst = Math.sin(t * 0.18) > 0.1; // OOK on/off pattern
+      for (let b = 0; b < BINS; b++) col[b] = Math.random() * 0.05;
+      if (burst) {
+        const bw = 5; // narrow bandwidth = clean device
+        for (let d = -bw; d <= bw; d++) {
+          const idx = mid + d;
+          if (idx < 0 || idx >= BINS) continue;
+          const v = Math.exp(-(d * d) / (bw * 0.6));
+          col[idx] = Math.max(col[idx], v * (0.82 + Math.random() * 0.12));
+        }
+        // Weak harmonics
+        [-14, 14].forEach(h => {
+          const hi = mid + h;
+          if (hi >= 0 && hi < BINS) col[hi] += 0.12 + Math.random() * 0.06;
+        });
+      }
+
+    } else if (mode === 'uncertain') {
+      // Noisy OOK: wider/jittery peak, lots of spurious energy
+      const burst = Math.sin(t * 0.18 + Math.sin(t * 0.07) * 0.9) > 0;
+      for (let b = 0; b < BINS; b++) col[b] = Math.random() * 0.12;
+      if (burst) {
+        const bw = 10; // wider = less clean
+        const jitter = Math.round((Math.random() - 0.5) * 4);
+        for (let d = -bw; d <= bw; d++) {
+          const idx = mid + d + jitter;
+          if (idx < 0 || idx >= BINS) continue;
+          const v = Math.exp(-(d * d) / (bw * 1.1));
+          col[idx] = Math.max(col[idx], v * (0.55 + Math.random() * 0.2));
+        }
+        // More spurious harmonics
+        [-20, -10, 10, 20].forEach(h => {
+          const hi = mid + h + Math.round((Math.random() - 0.5) * 3);
+          if (hi >= 0 && hi < BINS) col[hi] += 0.2 + Math.random() * 0.15;
+        });
+      }
+
+    } else if (mode === 'denied') {
+      // Wideband interference / jamming — energy across the whole band
+      for (let b = 0; b < BINS; b++) {
+        const noise = Math.random();
+        const sweep = Math.abs(Math.sin(b * 0.18 + t * 0.12));
+        col[b] = 0.15 + noise * 0.25 + sweep * 0.35;
+      }
+      // Random bright spikes
+      for (let s = 0; s < 4; s++) {
+        const sp = Math.floor(Math.random() * BINS);
+        col[sp] = 0.7 + Math.random() * 0.3;
+      }
+    }
+
+    return col;
+  }
+
+  // Map power (0–1) to RGBA using theme signal color
+  function powerToRGBA(p, theme) {
+    const t = THEMES[theme];
+    // Parse signal hex
+    const hex = t.signal.replace('#','');
+    const sr  = parseInt(hex.slice(0,2),16);
+    const sg  = parseInt(hex.slice(2,4),16);
+    const sb_ = parseInt(hex.slice(4,6),16);
+
+    // Gradient: black → dark tint → signal color → white-hot
+    if (p < 0.05) return [0, 0, 0, 255];
+    if (p < 0.35) {
+      const f = (p - 0.05) / 0.30;
+      return [Math.round(sr * f * 0.3), Math.round(sg * f * 0.3), Math.round(sb_ * f * 0.3), 255];
+    }
+    if (p < 0.75) {
+      const f = (p - 0.35) / 0.40;
+      return [Math.round(sr * (0.3 + f * 0.7)), Math.round(sg * (0.3 + f * 0.7)), Math.round(sb_ * (0.3 + f * 0.7)), 255];
+    }
+    // Hot: signal → near-white
+    const f = (p - 0.75) / 0.25;
+    return [
+      Math.round(sr + (255 - sr) * f),
+      Math.round(sg + (255 - sg) * f * 0.7),
+      Math.round(sb_ + (255 - sb_) * f * 0.3),
+      255
+    ];
+  }
+
+  let frame = 0;
+  function drawWaterfall() {
+    if (!offscreen) { requestAnimationFrame(drawWaterfall); return; }
+    W = cvs.width; H = cvs.height;
+
+    // Scroll left by 1px
+    offCtx.drawImage(offscreen, -1, 0);
+
+    // Draw new column on the right edge
+    const col    = genColumn(canvasMode, frame);
+    const imgData = offCtx.createImageData(1, H);
+    const d      = imgData.data;
+
+    for (let b = 0; b < H; b++) {
+      // Frequency bins: top = high freq, bottom = low freq
+      const binIdx = H - 1 - b;
+      const p      = Math.min(1, col[binIdx] || 0);
+      const [r, g, bC, a] = powerToRGBA(p, currentTheme);
+      const i = b * 4;
+      d[i]   = r; d[i+1] = g; d[i+2] = bC; d[i+3] = a;
+    }
+    offCtx.putImageData(imgData, W - 1, 0);
+
+    // Blit to visible canvas
+    ctx.drawImage(offscreen, 0, 0);
+
+    // Center-frequency hairline
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth   = 1;
+    ctx.moveTo(0, H / 2);
+    ctx.lineTo(W, H / 2);
+    ctx.stroke();
+
+    frame++;
+    requestAnimationFrame(drawWaterfall);
+  }
+  drawWaterfall();
+})();
+
+/* ── Plotly charts ───────────────────────────────────────────────────────── */
+const PLOTLY_CFG = { displayModeBar:false, responsive:true };
+
+function plotLayout(theme) {
+  const t = THEMES[theme];
+  return {
+    paper_bgcolor:t.bgCard, plot_bgcolor:t.bgRoot,
+    font:{ family:'Space Mono,monospace', size:9, color:t.text },
+    margin:{ l:44,r:16,t:14,b:38 }, height:230,
+    showlegend:false,
+    xaxis:{ showgrid:false,zeroline:false,color:t.textMuted,tickfont:{size:8} },
+    yaxis:{ gridcolor:t.border,gridwidth:1,zerolinecolor:t.border,zeroline:false,color:t.textMuted,tickfont:{size:8} },
+  };
+}
+
+function drawAmpChart(ampData, theme, divId) {
+  const t=THEMES[theme], h=t.signal.replace('#','');
+  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  Plotly.newPlot(divId, [{
+    x:ampData.map((_,i)=>i), y:ampData, type:'scatter', mode:'lines',
+    line:{color:t.signal,width:1.5}, fill:'tozeroy', fillcolor:`rgba(${r},${g},${b},0.07)`,
+  }], { ...plotLayout(theme),
+    xaxis:{...plotLayout(theme).xaxis,title:{text:'Sample',font:{size:8}}},
+    yaxis:{...plotLayout(theme).yaxis,title:{text:'Amplitude',font:{size:8}}}
+  }, PLOTLY_CFG);
+}
+
+function drawIQChart(iData, qData, theme, divId, title) {
+  const t=THEMES[theme], xs=iData.map((_,i)=>i);
+  Plotly.newPlot(divId, [
+    {x:xs,y:iData,type:'scatter',mode:'lines',name:'I',line:{color:t.signal,width:1.5},showlegend:true},
+    {x:xs,y:qData,type:'scatter',mode:'lines',name:'Q',line:{color:'#f09c28',width:1.5},showlegend:true},
+  ], { ...plotLayout(theme), showlegend:true,
+    legend:{font:{size:8,color:t.textMuted},bgcolor:'transparent'},
+    xaxis:{...plotLayout(theme).xaxis,title:{text:'Sample',font:{size:8}}},
+    yaxis:{...plotLayout(theme).yaxis,title:{text:'Amplitude',font:{size:8}}}
+  }, PLOTLY_CFG);
+}
+
+function drawConfChart(probs, thr, theme, divId) {
+  const t=THEMES[theme];
+  Plotly.newPlot(divId, [{ x:probs.map((_,i)=>i), y:probs, type:'bar', marker:{color:t.signal} }], {
+    ...plotLayout(theme),
+    shapes:[{type:'line',x0:0,x1:probs.length-1,y0:thr,y1:thr,line:{color:'#e04040',width:1.5,dash:'dash'}}],
+    annotations:[{x:probs.length-1,y:thr,text:`Thr ${thr.toFixed(0)}%`,font:{size:8,color:'#e04040'},showarrow:false,xanchor:'right'}],
+    xaxis:{...plotLayout(theme).xaxis,title:{text:'Burst index',font:{size:8}}},
+    yaxis:{...plotLayout(theme).yaxis,range:[0,100],title:{text:'Confidence (%)',font:{size:8}}}
+  }, PLOTLY_CFG);
+}
+
+function drawOverlayChart(ampA, ampB, divId) {
+  const t=THEMES.green;
+  Plotly.newPlot(divId, [
+    {x:ampA.map((_,i)=>i),y:ampA,type:'scatter',mode:'lines',name:'Signal A (auth)',line:{color:'#00e87a',width:1.5},showlegend:true},
+    {x:ampB.map((_,i)=>i),y:ampB,type:'scatter',mode:'lines',name:'Signal B (rogue)',line:{color:'#e04040',width:1.5},showlegend:true},
+  ], { ...plotLayout('green'), paper_bgcolor:t.bgRoot, plot_bgcolor:t.bgRoot,
+    showlegend:true, legend:{font:{size:8,color:t.textMuted},bgcolor:'transparent'}
+  }, PLOTLY_CFG);
+}
+
+/* ── Theme ───────────────────────────────────────────────────────────────── */
+function applyTheme(theme, swatchEl) {
+  currentTheme = theme;
+  document.body.classList.remove('theme-amber','theme-red');
+  if (theme !== 'green') document.body.classList.add('theme-' + theme);
+
+  document.querySelectorAll('.theme-swatch').forEach(s => s.classList.remove('active'));
+  if (swatchEl) swatchEl.classList.add('active');
+
+  const status = document.getElementById('sys-state-val');
+  const dot    = document.getElementById('dot-status');
+  if (theme === 'red') {
+    status.textContent = 'THREAT DETECTED'; status.className = 'rv'; status.style.color = '#e04040';
+    dot.className = 'sh-dot dot-red';
+    document.getElementById('threat-label').style.display = 'inline';
+  } else if (theme === 'amber') {
+    status.textContent = 'SYSTEM UNCERTAIN'; status.className = 'rv'; status.style.color = '#f09c28';
+    dot.className = 'sh-dot dot-amber';
+    document.getElementById('threat-label').style.display = 'none';
+  } else {
+    status.textContent = 'SYSTEM ARMED'; status.className = 'rv green'; status.style.color = '';
+    dot.className = 'sh-dot';
+    document.getElementById('threat-label').style.display = 'none';
+  }
+}
+
+function confToTheme(c) { return c >= 85 ? 'green' : c >= 50 ? 'amber' : 'red'; }
+function confToStyle(c) {
+  if (c >= 85) return { color:'#00e87a', icon:'●', label:'AUTHORIZED',    badge:'SIGNAL VERIFIED' };
+  if (c >= 50) return { color:'#f09c28', icon:'◑', label:'UNCERTAIN',     badge:'LOW CONFIDENCE' };
+  return             { color:'#e04040', icon:'○', label:'ACCESS DENIED', badge:'THREAT DETECTED' };
+}
+
+/* ── Session log ─────────────────────────────────────────────────────────── */
+function renderSessionLog() {
+  const el = document.getElementById('session-log');
+  if (!sessionLog.length) {
+    el.innerHTML = '<div class="idle-card" style="padding:12px 8px;">NO ENTRIES THIS SESSION</div>';
+    return;
+  }
+  const rows = sessionLog.map(([ts,fn,res,conf,bursts]) => {
+    const cls = res === 'PASS' ? 'row-pass' : 'row-fail';
+    return `<tr class="${cls}"><td>${ts}</td><td>${fn}</td><td>${res}</td><td>${conf}</td><td>${bursts}</td></tr>`;
+  }).join('');
+  el.innerHTML = `<div class="session-wrap"><table class="session-tbl">
+    <thead><tr><th>TIME</th><th>FILE</th><th>RESULT</th><th>CONF</th><th>BURSTS</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+let toastTimer;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+/* ── Threat Timeline ─────────────────────────────────────────────────────── */
+const tlEvents = [];
+
+function pushTimelineEvent(conf, label, ts) {
+  const color = conf >= 85 ? '#00e87a' : conf >= 50 ? '#f09c28' : '#e04040';
+  const result = conf >= 85 ? 'PASS' : conf >= 50 ? 'UNCERTAIN' : 'FAIL';
+  tlEvents.push({ color, result, label, ts, conf });
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const container = document.getElementById('tl-events');
+  const empty     = document.getElementById('tl-empty');
+  if (!tlEvents.length) { if (empty) empty.style.display = 'block'; return; }
+  if (empty) empty.style.display = 'none';
+
+  container.innerHTML = '';
+
+  // Show last N events that fit; newest on the right
+  const MAX = 40;
+  const visible = tlEvents.slice(-MAX);
+
+  visible.forEach((ev, i) => {
+    const el = document.createElement('div');
+    el.className = 'tl-event';
+
+    // Pulse animation for newest
+    const isLatest = i === visible.length - 1;
+    const dotAnim  = isLatest ? `animation:rfpulse 1.4s ease-in-out 3;` : '';
+
+    el.innerHTML = `
+      <div class="tl-tooltip">${ev.result} · ${ev.conf.toFixed(1)}% · ${ev.ts}<br><span style="color:var(--text-muted);font-size:6px;">${ev.label}</span></div>
+      <div class="tl-dot" style="background:${ev.color};color:${ev.color};${dotAnim}"></div>
+      <div class="tl-ts">${ev.ts.slice(0,5)}</div>`;
+    container.appendChild(el);
+  });
+
+  // Draw connecting line segments between events
+  // (handled by the rail CSS — dots sit on top)
+
+  // Auto-scroll: keep newest in view
+  const track = document.getElementById('tl-track');
+  const totalW = container.scrollWidth;
+  const trackW = track.offsetWidth;
+  if (totalW > trackW) {
+    container.style.transform = `translateX(${trackW - totalW}px)`;
+  } else {
+    container.style.transform = 'translateX(0)';
+  }
+}
+
+/* ── #3 Radial confidence gauge ──────────────────────────────────────────── */
+function buildGauge(conf, color) {
+  const label = conf >= 85 ? 'AUTHORIZED' : conf >= 50 ? 'UNCERTAIN' : 'DENIED';
+  // CSS conic-gradient gauge — zero SVG, zero filter bleed
+  return `
+  <div style="display:flex;flex-direction:column;align-items:center;padding:10px 0 6px;">
+    <div style="position:relative;width:110px;height:110px;">
+      <!-- Outer ring track -->
+      <div id="gauge-track-el" style="
+        position:absolute;inset:0;border-radius:50%;
+        background:conic-gradient(from 150deg, var(--border) 0deg, var(--border) 240deg, transparent 240deg);
+      "></div>
+      <!-- Filled arc — starts at 0, JS updates to final value -->
+      <div id="gauge-fill-el" style="
+        position:absolute;inset:0;border-radius:50%;
+        background:conic-gradient(from 150deg, ${color} 0deg, ${color} 0deg, transparent 0deg);
+        transition:background 0.9s cubic-bezier(.4,0,.2,1);
+      "></div>
+      <!-- Inner mask to create arc shape -->
+      <div style="
+        position:absolute;inset:14px;border-radius:50%;
+        background:var(--bg-card);
+        display:flex;flex-direction:column;align-items:center;justify-content:center;
+      ">
+        <span id="gauge-num" style="
+          font-family:'Orbitron',monospace;font-size:18px;font-weight:900;
+          color:${color};line-height:1;
+        ">0%</span>
+        <span style="
+          font-size:6px;letter-spacing:.2em;color:var(--text-muted);
+          text-transform:uppercase;margin-top:3px;
+        ">confidence</span>
+      </div>
+      <!-- Tick dots at 0/25/50/75/100% positions -->
+      ${[0,25,50,75,100].map(pct => {
+        const deg = 150 + (pct/100)*240;
+        const rad = deg * Math.PI / 180;
+        const x = 50 + 46 * Math.cos(rad);
+        const y = 50 + 46 * Math.sin(rad);
+        return `<div style="position:absolute;width:3px;height:3px;border-radius:50%;
+          background:${pct===50?color+'99':color+'44'};
+          left:${x.toFixed(1)}%;top:${y.toFixed(1)}%;transform:translate(-50%,-50%);"></div>`;
+      }).join('')}
+    </div>
+    <span class="result-badge" style="color:${color};border-color:${color}66;background:${color}1a;margin-top:6px;">${label}</span>
+  </div>`;
+}
+
+function animateGauge(conf, color) {
+  requestAnimationFrame(() => {
+    const fillEl = document.getElementById('gauge-fill-el');
+    const numEl  = document.getElementById('gauge-num');
+    if (!fillEl || !numEl) return;
+
+    // Animate conic-gradient fill from 0 → conf degrees (max 240deg)
+    const targetDeg = (Math.min(conf, 100) / 100) * 240;
+    let start = null;
+    const duration = 900;
+
+    function step(ts) {
+      if (!start) start = ts;
+      const progress = Math.min((ts - start) / duration, 1);
+      const eased    = 1 - Math.pow(1 - progress, 3);
+      const curDeg   = eased * targetDeg;
+      const curConf  = eased * conf;
+
+      fillEl.style.background = `conic-gradient(from 150deg, ${color} 0deg, ${color} ${curDeg.toFixed(1)}deg, transparent ${curDeg.toFixed(1)}deg)`;
+      numEl.textContent = curConf.toFixed(1) + '%';
+
+      if (progress < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+/* ── #4 Keyboard shortcuts ───────────────────────────────────────────────── */
+let kbHintVisible = false;
+const themeOrder  = ['green','amber','red'];
+let   themeIdx    = 0;
+
+function toggleKbHint() {
+  kbHintVisible = !kbHintVisible;
+  document.getElementById('kb-hint').classList.toggle('show', kbHintVisible);
+}
+
+document.addEventListener('keydown', e => {
+  // Ignore if user is typing in an input
+  if (e.target.tagName === 'INPUT') return;
+
+  switch (e.key) {
+    case ' ':
+    case 'Spacebar':
+      e.preventDefault();
+      demoResult(85 + Math.random() * 15);  // random PASS for space
+      break;
+    case 'c': case 'C':
+      document.querySelector('[data-tab="compare"]').click(); break;
+    case 'a': case 'A':
+      document.querySelector('[data-tab="auth"]').click(); break;
+    case 't': case 'T':
+      themeIdx = (themeIdx + 1) % themeOrder.length;
+      applyTheme(themeOrder[themeIdx]);
+      break;
+    case 's': case 'S':
+      toggleSidebar(); break;
+    case 'e': case 'E':
+      exportCSV(); break;
+    case '?':
+      toggleKbHint(); break;
+  }
+});
+
+/* ── #5 Session statistics ───────────────────────────────────────────────── */
+let statsData = [];  // { conf, result }
+
+function updateStats(conf, result) {
+  statsData.push({ conf, result });
+  const total    = statsData.length;
+  const passes   = statsData.filter(s => s.result === 'PASS').length;
+  const passRate = ((passes / total) * 100).toFixed(0) + '%';
+  const avgConf  = (statsData.reduce((a,s) => a + s.conf, 0) / total).toFixed(1) + '%';
+  const bestConf = Math.max(...statsData.map(s => s.conf)).toFixed(1) + '%';
+
+  document.getElementById('stat-total').textContent     = total;
+  document.getElementById('stat-pass-rate').textContent = passRate;
+  document.getElementById('stat-avg-conf').textContent  = avgConf;
+  document.getElementById('stat-best').textContent      = bestConf;
+
+  // Color pass rate
+  const pr = parseInt(passRate);
+  const prEl = document.getElementById('stat-pass-rate');
+  prEl.style.color = pr >= 80 ? '#00e87a' : pr >= 50 ? '#f09c28' : '#e04040';
+
+  document.getElementById('session-stats').style.display = 'grid';
+}
+
+/* ── #6 Export CSV ───────────────────────────────────────────────────────── */
+function exportCSV() {
+  if (!sessionLog.length) return;
+  const header = 'Timestamp,Filename,Result,Confidence,Bursts\n';
+  const rows   = sessionLog.map(r => r.join(',')).join('\n');
+  const blob   = new Blob([header + rows], { type:'text/csv' });
+  const url    = URL.createObjectURL(blob);
+  const a      = document.createElement('a');
+  a.href       = url;
+  a.download   = `rffpla_session_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✓ SESSION LOG EXPORTED');
+}
+
+/* ── #7 Per-burst waveform scrubber ──────────────────────────────────────── */
+let burstHighlightActive = false;
+let burstTotal = 0;
+
+function attachBurstScrubber(nBursts) {
+  burstTotal = nBursts;
+  const chartEl = document.getElementById('chart-conf');
+  if (!chartEl) return;
+  chartEl.on('plotly_click', data => {
+    if (!data.points || !data.points[0]) return;
+    const burstIdx = data.points[0].x;
+    highlightBurst(burstIdx, nBursts);
+    showToast(`◈ BURST ${burstIdx + 1} / ${nBursts} · SCRUBBING`);
+  });
+}
+
+function highlightBurst(idx, total) {
+  // Flash the waveform canvas with a burst position indicator
+  burstHighlightActive = true;
+  const cvs = document.getElementById('waveform-canvas');
+  const ctx = cvs.getContext('2d');
+  const W = cvs.width, H = cvs.height;
+  const xPos = (idx / Math.max(total - 1, 1)) * W;
+
+  // Draw highlight overlay
+  const t = THEMES[currentTheme];
+  ctx.save();
+  ctx.fillStyle = t.signal + '22';
+  ctx.fillRect(xPos - 12, 0, 24, H);
+  ctx.strokeStyle = t.signal;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(xPos, 0);
+  ctx.lineTo(xPos, H);
+  ctx.stroke();
+
+  // Label
+  ctx.setLineDash([]);
+  ctx.fillStyle = t.signal;
+  ctx.font = '8px Space Mono, monospace';
+  ctx.letterSpacing = '0.1em';
+  ctx.fillText(`B${idx + 1}`, Math.min(xPos + 4, W - 24), 14);
+  ctx.restore();
+
+  // Clear after 2.5s
+  setTimeout(() => { burstHighlightActive = false; }, 2500);
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────────── */
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+function showMsg(id, type, text) {
+  const el  = document.getElementById(id);
+  const cls = type === 'error' ? 'msg-error' : 'msg-info';
+  el.innerHTML += `<div class="${cls}">${text}</div>`;
+}
+
+/* ── #9 CRT phosphor toggle ──────────────────────────────────────────────── */
+let crtEnabled = true;
+// Add toggle button to page
+(function() {
+  const btn = document.createElement('button');
+  btn.id = 'crt-toggle';
+  btn.textContent = '◉ CRT ON';
+  btn.onclick = () => {
+    crtEnabled = !crtEnabled;
+    ['crt-overlay','crt-vignette','crt-phosphor'].forEach(id => {
+      document.getElementById(id).style.display = crtEnabled ? 'block' : 'none';
+    });
+    btn.textContent = crtEnabled ? '◉ CRT ON' : '◎ CRT OFF';
+    btn.classList.toggle('off', !crtEnabled);
+  };
+  document.body.appendChild(btn);
+})();
+
+/* ── #10 Sound design (Web Audio API) ───────────────────────────────────── */
+let audioCtx = null;
+let soundEnabled = true;
+
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playTone(freq, type, duration, volume, delay_s = 0) {
+  if (!soundEnabled) return;
+  try {
+    const ctx  = getAudioCtx();
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.type      = type;
+    osc.frequency.setValueAtTime(freq, ctx.currentTime + delay_s);
+    gain.gain.setValueAtTime(0, ctx.currentTime + delay_s);
+    gain.gain.linearRampToValueAtTime(volume, ctx.currentTime + delay_s + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay_s + duration);
+
+    osc.start(ctx.currentTime + delay_s);
+    osc.stop(ctx.currentTime + delay_s + duration + 0.05);
+  } catch(e) {}
+}
+
+function playAuthSound(conf) {
+  if (conf >= 85) {
+    // PASS: clean two-tone chime (ascending)
+    playTone(660,  'sine', 0.12, 0.08, 0);
+    playTone(880,  'sine', 0.18, 0.06, 0.12);
+    playTone(1100, 'sine', 0.22, 0.04, 0.26);
+  } else if (conf >= 50) {
+    // UNCERTAIN: single mid warble
+    playTone(440, 'sine',   0.15, 0.06, 0);
+    playTone(400, 'square', 0.10, 0.02, 0.18);
+  } else {
+    // DENIED: descending alarm tones
+    playTone(440, 'square', 0.12, 0.07, 0);
+    playTone(330, 'square', 0.12, 0.07, 0.15);
+    playTone(220, 'sawtooth',0.20, 0.06, 0.30);
+  }
+}
+
+function playClickSound() {
+  playTone(800, 'sine', 0.04, 0.03);
+}
+
+// Wire auth sound into showResult — patch via monkey-patch after definition
+const _origShowResult = showResult;
+// (sound called directly inside showResult below via direct call)
+
+/* ── #11 Mobile sidebar ──────────────────────────────────────────────────── */
+function toggleSidebar() {
+  const sb  = document.getElementById('sidebar');
+  const btn = document.getElementById('sb-open-btn');
+  const isMobile = window.innerWidth <= 768;
+
+  if (isMobile) {
+    sb.classList.toggle('mobile-open');
+    sb.classList.remove('collapsed');
+  } else {
+    sb.classList.toggle('collapsed');
+    btn.style.display = sb.classList.contains('collapsed') ? 'block' : 'none';
+  }
+}
+
+// Mobile: sidebar collapse btn text
+document.querySelector('.sb-collapse-btn').addEventListener('click', () => {
+  if (window.innerWidth <= 768) toggleSidebar();
+});
+
+/* ── #12 Animated ping RTT ───────────────────────────────────────────────── */
+(function pingRTT() {
+  const el = document.getElementById('ping-rtt');
+  if (!el) return;
+  function updateRTT() {
+    // Simulate realistic RTT for a 433MHz node (1–8ms typical)
+    const rtt = (1.2 + Math.random() * 6.8).toFixed(1);
+    el.textContent = `RTT: ${rtt} ms`;
+    // Color-code: green <4ms, amber 4-7ms, red >7ms
+    el.style.color = rtt < 4 ? 'var(--signal)' : rtt < 7 ? '#f09c28' : '#e04040';
+  }
+  updateRTT();
+  setInterval(updateRTT, 2400); // sync with ping animation cycle
+})();
+
+/* ── Tweaks ──────────────────────────────────────────────────────────────── */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "green",
+  "sidebarWidth": 240,
+  "titleSize": 54,
+  "crtEnabled": true,
+  "soundEnabled": true
+}/*EDITMODE-END*/;
+
+let tweakPanel = null;
+
+window.addEventListener('message', e => {
+  if (e.data?.type === '__activate_edit_mode') showTweaks();
+  if (e.data?.type === '__deactivate_edit_mode') hideTweaks();
+});
+window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+
+function showTweaks() {
+  if (tweakPanel) { tweakPanel.style.display = 'block'; return; }
+  tweakPanel = document.createElement('div');
+  tweakPanel.style.cssText = `
+    position:fixed;bottom:24px;right:24px;background:#091510;
+    border:1px solid #163220;border-radius:6px;padding:16px;
+    font-family:'Space Mono',monospace;font-size:9px;color:#366048;
+    z-index:9998;min-width:200px;letter-spacing:.12em;
+  `;
+  tweakPanel.innerHTML = `
+    <div style="font-size:8px;letter-spacing:.35em;color:#00e87a;margin-bottom:12px;text-transform:uppercase;border-bottom:1px solid #163220;padding-bottom:8px;">Tweaks</div>
+    <div style="margin-bottom:10px;">
+      <div style="margin-bottom:5px;text-transform:uppercase;">Theme</div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="applyTheme('green')" style="background:#00e87a22;border:1px solid #00e87a55;color:#00e87a;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">GREEN</button>
+        <button onclick="applyTheme('amber')" style="background:#f09c2822;border:1px solid #f09c2855;color:#f09c28;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">AMBER</button>
+        <button onclick="applyTheme('red')"   style="background:#e0404022;border:1px solid #e0404055;color:#e04040;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">RED</button>
+      </div>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="margin-bottom:5px;text-transform:uppercase;">Sidebar</div>
+      <button onclick="toggleSidebar()" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">TOGGLE</button>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="margin-bottom:5px;text-transform:uppercase;">CRT Effect</div>
+      <button onclick="document.getElementById('crt-toggle').click()" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">TOGGLE CRT</button>
+    </div>
+    <div style="margin-bottom:10px;">
+      <div style="margin-bottom:5px;text-transform:uppercase;">Sound</div>
+      <button onclick="soundEnabled=!soundEnabled;this.textContent=soundEnabled?'SOUND ON':'SOUND OFF';playClickSound();" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 10px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">SOUND ON</button>
+    </div>
+    <div>
+      <div style="margin-bottom:5px;text-transform:uppercase;">Demo result</div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="demoResult(92)" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">PASS</button>
+        <button onclick="demoResult(62)" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">UNCERTAIN</button>
+        <button onclick="demoResult(18)" style="background:transparent;border:1px solid #163220;color:#366048;padding:4px 8px;cursor:pointer;font-family:inherit;font-size:8px;border-radius:2px;">DENY</button>
+      </div>
+    </div>`;
+  document.body.appendChild(tweakPanel);
+}
+
+function hideTweaks() { if (tweakPanel) tweakPanel.style.display = 'none'; }
+
+/* Demo result for Tweaks */
+function demoResult(conf) {
+  const n = Math.round(8 + Math.random()*12);
+  const probs = Array.from({length:n}, () => conf + (Math.random()-0.5)*12);
+  const amp   = Array.from({length:200}, (_,i) => 0.3 + 0.6*Math.sin(i*.08)*Math.exp(-i*.003) + (Math.random()-.5)*.05);
+  const iData = Array.from({length:200}, (_,i) => Math.cos(i*.15)*(0.5+Math.random()*.2));
+  const qData = Array.from({length:200}, (_,i) => Math.sin(i*.15)*(0.5+Math.random()*.2));
+  const ts    = new Date().toTimeString().slice(0,8);
+  showResult({
+    confidence:conf, n_bursts:n, n_windows:n, n_samples:200*1024,
+    duration_s:8.3, std:4.2, amp, i_ch:iData, q_ch:qData, probs,
+    timestamp: ts
+  }, 'demo_signal.c64');
+}
+
+// Seed demo timeline events so it's populated on load
+(function seedTimeline() {
+  const seeds = [
+    { conf:94.2, ts:'19:08:11', label:'session_001.c64' },
+    { conf:91.7, ts:'19:09:44', label:'session_002.c64' },
+    { conf:63.1, ts:'19:11:02', label:'unknown_device.c64' },
+    { conf:95.5, ts:'19:12:30', label:'session_003.c64' },
+    { conf:22.4, ts:'19:13:58', label:'rogue_signal.c64' },
+    { conf:88.9, ts:'19:15:10', label:'session_004.c64' },
+  ];
+  seeds.forEach(s => pushTimelineEvent(s.conf, s.label, s.ts));
+})();
+</script>
+</body>
+</html>
