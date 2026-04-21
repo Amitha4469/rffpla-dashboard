@@ -21,14 +21,14 @@ Transmitter        Receiver          Signal capture       Feature extract    CNN
 | Signal capture         | GNU Radio Companion  | Saves raw IQ to .c64 binary files             |
 | Preprocessing          | `preprocess.py`      | Burst extraction, normalisation, windowing    |
 | Classifier             | 1D CNN (TFLite)      | Authenticates device from signal fingerprint  |
-| Dashboard              | Streamlit            | Real-time authentication UI                   | 
+| Dashboard              | Render web app       | Real-time authentication UI                   | 
 
 ---
 
 
 ## Repository Structure
 rffpla-dashboard/
-├── app.py                  # Streamlit dashboard
+├── app.py                  # Render web dashboard
 ├── preprocess.py           # Standalone burst extraction + dataset builder
 ├── config.py               # Shared signal constants (threshold, window, freq)
 ├── requirements.txt        # Pinned Python dependencies
@@ -56,7 +56,13 @@ rffpla-dashboard/
 - Windows 10/11 (tested) or Linux
 - RTL-SDR driver installed (for live capture)
 
-### Install and run
+### Access the live dashboard
+
+The dashboard is publicly hosted on Render — no local setup required:
+
+**https://rffpla-dashboard.onrender.com/**
+
+### Local development (optional)
 
 ```bash
 # Clone the repository
@@ -69,11 +75,9 @@ pip install -r requirements.txt
 # Move model file into models/ folder
 # (download RFFPLA_classifier.tflite from Google Drive — see models/README.md)
 
-# Launch dashboard
+# Launch dashboard locally
 streamlit run app.py
 ```
-
-Dashboard opens at `http://localhost:8501`
 
 ### Preprocess new recordings
 

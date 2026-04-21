@@ -124,3 +124,24 @@ content patterns), FSK (modulation difference too easily detectable).
 
 **Date:** Sprint 2, February 2026
 
+---
+
+## DL-011 — Deploy dashboard on Render instead of running Streamlit locally
+
+**Decision:** Host app.py as a public Render web service at
+https://rffpla-dashboard.onrender.com/ rather than requiring users to
+run `streamlit run app.py` on their own machine.
+
+**Reason:** Eliminates local Python environment and dependency setup
+for anyone evaluating the system. The dashboard is publicly accessible
+from any browser without cloning the repository, which is appropriate
+for a thesis demonstration and examiner review.
+
+**Alternatives considered:** Streamlit Community Cloud (free tier, but
+limited to public repos and lacks ai-edge-litert binary compatibility
+on their build environment); keep local only (requires examiner to
+install dependencies and download the model file — impractical for
+remote review).
+
+**Date:** April 2026
+

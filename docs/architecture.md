@@ -13,7 +13,7 @@ Transmitter          Receiver           Capture
 ESP32 + CC1101  -->  RTL-SDR V3    -->  GNU Radio (.c64)
 433.92 MHz OOK       2 Msps IQ          Low-pass + squelch
 Processing           Training           Deployment
-preprocess.py   -->  train.py      -->  app.py (Streamlit)
+preprocess.py   -->  train.py      -->  app.py (Render)
 Burst extract        1D CNN             Auth result
 Normalise            TFLite save        Compare mode
 Window 1024
@@ -58,7 +58,8 @@ Window 1024
 - Runtime: TFLite via ai-edge-litert
 - Parameters: 44,577
 
-### Dashboard — Streamlit app.py
+### Dashboard — Render web app (app.py)
+- Hosted at: https://rffpla-dashboard.onrender.com/
 - File upload: accepts .c64 files up to 200MB
 - Preprocessing: calls extract_bursts() from preprocess.py
 - Inference: runs TFLite interpreter on each extracted burst
@@ -73,7 +74,7 @@ Window 1024
 | Raw capture  | .c64 (complex64 binary)    | ~960 MB per 60s       |
 | Burst arrays | .npy (numpy float32)       | ~400 KB per 50 bursts |
 | Trained model| .tflite                    | ~180 KB               |
-| Auth result  | Streamlit UI + session log | In-memory             |
+| Auth result  | Render web UI + session log | In-memory             |
 
 ## Key Signal Parameters
 
