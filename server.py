@@ -111,6 +111,42 @@ def predict_route():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/predict', methods=['POST'])
+def api_predict():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded'}), 400
+
+        raw = request.files['file'].read()
+
+        if len(raw) < 8000:
+            return jsonify({'error': 'File too small — minimum ~5 s at 2 Msps'}), 400
+
+        X, _bursts, info = parse_c64(raw)
+
+        if X is None or len(X) == 0:
+            return jsonify({'error': 'No valid bursts detected'}), 400
+
+        conf, _probs, _std = predict(X)
+
+        if conf >= 85.0:
+            result = 'AUTHORIZED'
+        elif conf >= 50.0:
+            result = 'UNCERTAIN'
+        else:
+            result = 'ACCESS DENIED'
+
+        return jsonify({
+            'result':           result,
+            'confidence':       round(conf / 100.0, 2),
+            'bursts_processed': int(len(X)),
+        }), 200
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/predict_compare', methods=['POST'])
 def predict_compare():
     try:
