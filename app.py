@@ -513,6 +513,7 @@ if "last_hash" not in st.session_state:
     st.session_state.last_hash = ""
 if "theme" not in st.session_state:
     st.session_state.theme = "green"
+st.cache_data.clear()
 
 # ── Inject themed CSS ─────────────────────────────────────────────────────────
 st.markdown(get_theme_css(st.session_state.theme), unsafe_allow_html=True)
@@ -554,7 +555,6 @@ def predict(X, interpreter):
     return is_auth, display_conf, probs, std_conf
 
 
-@st.cache_data(show_spinner=False)
 def _run_predict(X: np.ndarray):
     interpreter, ok, err = load_model()
     if not ok or interpreter is None:
@@ -1192,6 +1192,7 @@ with tab1:
                     with rp:
                         session_id = f"AUTH_S{len(st.session_state.session_log) + 1}"
                         st.markdown('<div class="panel-hdr">◈ AUTHENTICATION RESULT</div>', unsafe_allow_html=True)
+                        st.write(f"DEBUG raw_mean={float(np.mean(probs)):.4f} | is_auth={is_auth} | conf={conf:.2f}")
                         _show_confidence(conf, is_auth)
                         st.markdown(
                             f"""
@@ -1446,6 +1447,7 @@ with tab2:
                     else:
                         color = "#e04040"; icon = "○"; decision = "ACCESS DENIED"; badge = "THREAT DETECTED"
 
+                    st.write(f"DEBUG is_auth={is_auth} | conf={conf:.2f}")
                     bar_w = min(100.0, conf)
                     st.markdown(
                         f"""
