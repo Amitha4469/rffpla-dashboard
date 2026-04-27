@@ -67,7 +67,9 @@ _THEMES = {
 }
 
 
-def _conf_to_theme(conf: float) -> str:
+def _conf_to_theme(conf: float, is_auth: bool) -> str:
+    if not is_auth:
+        return "red"
     if conf >= 85.0:
         return "green"
     elif conf >= 50.0:
@@ -542,11 +544,14 @@ def predict(X, interpreter):
         interpreter.invoke()
         out = interpreter.get_tensor(output_details[0]["index"])
         probs.append(float(out[0][0]))
-    probs = np.array(probs)
-    mean_conf = float(np.mean(probs)) * 100
-    std_conf  = float(np.std(probs))
-    is_auth   = mean_conf >= 50.0
-    return is_auth, mean_conf, probs, std_conf
+    probs       = np.array(probs)
+    mean_output = float(np.mean(probs))
+    std_conf    = float(np.std(probs))
+    is_auth     = mean_output < 0.5
+    # auth signal: confidence = how far output is from 1 (rogue pole)
+    # rogue signal: confidence = the raw rogue score
+    display_conf = ((1.0 - mean_output) if is_auth else mean_output) * 100.0
+    return is_auth, display_conf, probs, std_conf
 
 
 @st.cache_data(show_spinner=False)
@@ -652,8 +657,10 @@ def chart_overlay(burst_a, burst_b, theme: str = "green"):
 
 # ── Signal Lab result card ────────────────────────────────────────────────────
 
-def _show_confidence(conf: float, display_thr: float):
-    if conf >= 85.0:
+def _show_confidence(conf: float, is_auth: bool):
+    if not is_auth:
+        color = "#e04040"; icon = "○"; label = "ACCESS DENIED"; badge = "THREAT DETECTED"
+    elif conf >= 85.0:
         color = "#00e87a"; icon = "●"; label = "AUTHORIZED";    badge = "SIGNAL VERIFIED"
     elif conf >= 50.0:
         color = "#f09c28"; icon = "◑"; label = "UNCERTAIN";     badge = "LOW CONFIDENCE"
@@ -1140,7 +1147,7 @@ with tab1:
                     thr = DISPLAY_THRESHOLD * 100.0
 
                     # ── Update theme and rerun if it changed ───────────────
-                    new_theme = _conf_to_theme(conf)
+                    new_theme = _conf_to_theme(conf, is_auth)
                     if new_theme != st.session_state.theme:
                         st.session_state.theme = new_theme
                         st.rerun()
@@ -1149,12 +1156,14 @@ with tab1:
                     _t         = _THEMES[_cur_theme]
 
                     # Canvas mode
-                    if conf >= 85.0:
-                        canvas_mode  = "authorized"
+                    if not is_auth:
+                        canvas_mode = "denied"
+                    elif conf >= 85.0:
+                        canvas_mode = "authorized"
                     elif conf >= 50.0:
-                        canvas_mode  = "uncertain"
+                        canvas_mode = "uncertain"
                     else:
-                        canvas_mode  = "denied"
+                        canvas_mode = "denied"
 
                     canvas_color = _t["signal"]
 
@@ -1183,7 +1192,7 @@ with tab1:
                     with rp:
                         session_id = f"AUTH_S{len(st.session_state.session_log) + 1}"
                         st.markdown('<div class="panel-hdr">◈ AUTHENTICATION RESULT</div>', unsafe_allow_html=True)
-                        _show_confidence(conf, thr)
+                        _show_confidence(conf, is_auth)
                         st.markdown(
                             f"""
                             <div class="meta-grid">
@@ -1395,13 +1404,13 @@ with tab2:
 
             # Overall page theme follows Signal A (only if tab1 has no file)
             if uploaded is None:
-                new_theme = _conf_to_theme(conf_a)
+                new_theme = _conf_to_theme(conf_a, auth_a)
                 if new_theme != st.session_state.theme:
                     st.session_state.theme = new_theme
                     st.rerun()
 
-            theme_a = _conf_to_theme(conf_a)
-            theme_b = _conf_to_theme(conf_b)
+            theme_a = _conf_to_theme(conf_a, auth_a)
+            theme_b = _conf_to_theme(conf_b, auth_b)
             t_a     = _THEMES[theme_a]
             t_b     = _THEMES[theme_b]
 
@@ -1428,7 +1437,9 @@ with tab2:
                         f'<div class="panel-hdr">◈ {label.upper()}</div>',
                         unsafe_allow_html=True,
                     )
-                    if conf >= 85.0:
+                    if not is_auth:
+                        color = "#e04040"; icon = "○"; decision = "ACCESS DENIED"; badge = "THREAT DETECTED"
+                    elif conf >= 85.0:
                         color = "#00e87a"; icon = "●"; decision = "AUTHORIZED";    badge = "SIGNAL VERIFIED"
                     elif conf >= 50.0:
                         color = "#f09c28"; icon = "◑"; decision = "UNCERTAIN";     badge = "LOW CONFIDENCE"
