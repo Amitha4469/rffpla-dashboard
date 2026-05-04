@@ -34,33 +34,34 @@ def predict(X):
         interpreter.invoke()
         out = interpreter.get_tensor(output_details[0]['index'])
         probs.append(float(out[0][0]))
-    probs     = np.array(probs)
-    mean_conf = float(np.mean(probs)) * 100
-    std_conf  = float(np.std(probs)) * 100
-    return mean_conf, probs.tolist(), std_conf
+    probs        = np.array(probs)
+    mean_output  = float(np.mean(probs))
+    std_conf     = float(np.std(probs)) * 100
+    is_auth      = mean_output > 0.70              # v5: high score = AUTH
+    display_conf = (mean_output if is_auth else (1.0 - mean_output)) * 100.0
+    return display_conf, is_auth, probs.tolist(), std_conf
 
 
-# ── Burst extraction + 3-channel window builder ───────────────────────────────
+# ── Burst extraction + 2-channel power-normalised window builder ──────────────
 def parse_c64(raw_bytes):
-    """Return (X, bursts, info) where X has shape (N, WINDOW_SIZE, 3)."""
-    _, bursts, info = extract_bursts(raw_bytes)   # raw bytes → (X2ch, bursts, info)
+    """Return (X, bursts, info) where X has shape (N, WINDOW_SIZE, 2)."""
+    _, bursts, info = extract_bursts(raw_bytes)
     windows = []
     for b in bursts:
-        # bursts from extract_bursts are already exactly WINDOW_SIZE samples
         if len(b) >= WINDOW_SIZE:
             centre = (len(b) - WINDOW_SIZE) // 2
             w = b[centre:centre + WINDOW_SIZE]
         else:
             w = np.concatenate([b, np.zeros(WINDOW_SIZE - len(b), dtype=np.complex64)])
-        I     = w.real.astype(np.float32)
-        Q     = w.imag.astype(np.float32)
-        absI  = np.abs(I)
-        absQ  = np.abs(Q)
-        ratio = absI / (absI + absQ + 1e-9)
-        windows.append(np.stack([I, Q, ratio], axis=-1))   # (WINDOW_SIZE, 3)
+        p = float(np.mean(np.abs(w)**2))
+        if not np.isfinite(p) or p <= 1e-12:
+            continue
+        w_norm = w / (np.sqrt(p) + 1e-12)
+        windows.append(np.stack([w_norm.real.astype(np.float32),
+                                  w_norm.imag.astype(np.float32)], axis=-1))  # (WINDOW_SIZE, 2)
     if not windows:
         return None, bursts, info
-    return np.array(windows, dtype=np.float32), bursts, info  # (N, WINDOW_SIZE, 3)
+    return np.array(windows, dtype=np.float32), bursts, info  # (N, WINDOW_SIZE, 2)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -87,13 +88,14 @@ def predict_route():
         if X is None or len(X) == 0:
             return jsonify({'error': 'No valid bursts detected — check squelch / recording length'}), 400
 
-        conf, probs, std = predict(X)
-        print(f'[/predict] conf={conf:.2f}%  std={std:.2f}%  windows={len(X)}')
+        conf, is_auth, probs, std = predict(X)
+        print(f'[/predict] conf={conf:.2f}%  is_auth={is_auth}  std={std:.2f}%  windows={len(X)}')
 
         b0   = bursts[0]
         step = max(1, len(b0) // 512)
         return jsonify({
             'confidence': round(conf, 2),
+            'is_auth':    is_auth,
             'probs':      [round(p * 100, 2) for p in probs],
             'std':        round(std, 2),
             'n_bursts':   len(bursts),
@@ -127,12 +129,12 @@ def api_predict():
         if X is None or len(X) == 0:
             return jsonify({'error': 'No valid bursts detected'}), 400
 
-        conf, _probs, _std = predict(X)
+        conf, is_auth, _probs, _std = predict(X)
 
-        if conf >= 85.0:
+        if is_auth and conf >= 85.0:
             result = 'AUTHORIZED'
-        elif conf >= 50.0:
-            result = 'UNCERTAIN'
+        elif is_auth and conf >= 70.0:
+            result = 'AUTHORIZED'
         else:
             result = 'ACCESS DENIED'
 
@@ -163,11 +165,12 @@ def predict_compare():
             if X is None or len(X) == 0:
                 results[key] = {'error': 'No bursts detected'}
                 continue
-            conf, probs, std = predict(X)
+            conf, is_auth, probs, std = predict(X)
             b0   = bursts[0]
             step = max(1, len(b0) // 512)
             results[key] = {
                 'confidence': round(conf, 2),
+                'is_auth':    is_auth,
                 'probs':      [round(p * 100, 2) for p in probs],
                 'std':        round(std, 2),
                 'n_bursts':   len(bursts),
