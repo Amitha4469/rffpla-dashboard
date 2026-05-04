@@ -11,6 +11,6 @@ SAMPLE_RATE = 2e6
 CENTER_FREQ = 433.92e6
 
 # Path to the TFLite classifier model, relative to the repo root
-MODEL_PATH = "models/RFFPLA_classifier_v2plus_3ch.tflite"
+MODEL_PATH = "models/RFFPLA_classifier_v5_iq2ch.tflite"
 
 N_CHANNELS  = 3                                             # add this if it doesn't exist
