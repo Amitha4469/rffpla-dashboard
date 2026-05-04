@@ -38,7 +38,7 @@ def predict(X):
     mean_output  = float(np.mean(probs))
     std_conf     = float(np.std(probs)) * 100
     is_auth      = mean_output > 0.70              # v5: high score = AUTH
-    display_conf = (mean_output if is_auth else (1.0 - mean_output)) * 100.0
+    display_conf = mean_output * 100.0  # raw auth prob — frontend thresholds at 70%
     return display_conf, is_auth, probs.tolist(), std_conf
 
 
@@ -131,9 +131,7 @@ def api_predict():
 
         conf, is_auth, _probs, _std = predict(X)
 
-        if is_auth and conf >= 85.0:
-            result = 'AUTHORIZED'
-        elif is_auth and conf >= 70.0:
+        if is_auth:
             result = 'AUTHORIZED'
         else:
             result = 'ACCESS DENIED'
