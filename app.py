@@ -25,16 +25,15 @@ def _safe_filename(name: str) -> str:
     return name or "unnamed_file"
 
 
-# ── 3-channel window helper ────────────────────────────────────────────────────
+# ── 2-channel window helper (v5 — power-normalised IQ) ───────────────────────
 
-def iq_to_3ch_window(iq_window_complex: np.ndarray) -> np.ndarray:
-    I = iq_window_complex.real.astype(np.float32)
-    Q = iq_window_complex.imag.astype(np.float32)
-    absI = np.abs(I)
-    absQ = np.abs(Q)
-    iq_ratio = absI / (absI + absQ + 1e-9)
-    X = np.stack([I, Q, iq_ratio.astype(np.float32)], axis=-1)
-    return X
+def iq_to_2ch_window(iq_chunk: np.ndarray):
+    p = np.mean(np.abs(iq_chunk)**2)
+    if not np.isfinite(p) or p <= 1e-12:
+        return None
+    iq_norm = iq_chunk / (np.sqrt(p) + 1e-12)
+    window = np.stack([iq_norm.real, iq_norm.imag], axis=-1)
+    return window.astype(np.float32)  # shape (WINDOW_SIZE, 2)
 
 
 # ── Theme definitions ─────────────────────────────────────────────────────────
@@ -548,10 +547,9 @@ def predict(X, interpreter):
     probs       = np.array(probs)
     mean_output = float(np.mean(probs))
     std_conf    = float(np.std(probs))
-    is_auth     = mean_output < 0.5
-    # auth signal: confidence = how far output is from 1 (rogue pole)
-    # rogue signal: confidence = the raw rogue score
-    display_conf = ((1.0 - mean_output) if is_auth else mean_output) * 100.0
+    is_auth     = mean_output > 0.70                    # v5: high score = AUTH
+    # auth: confidence = raw auth score; rogue: confidence = 1 - score
+    display_conf = (mean_output if is_auth else (1.0 - mean_output)) * 100.0
     return is_auth, display_conf, probs, std_conf
 
 
@@ -956,13 +954,14 @@ def _parse_upload(raw_bytes: bytes):
             continue
         start = (len(b) - WINDOW_SIZE) // 2
         iq_window = b[start:start + WINDOW_SIZE]
-        X3 = iq_to_3ch_window(iq_window)
-        windows.append(X3)
+        X2 = iq_to_2ch_window(iq_window)
+        if X2 is not None:
+            windows.append(X2)
 
     if windows:
         X = np.stack(windows, axis=0).astype(np.float32)
     else:
-        X = np.zeros((0, WINDOW_SIZE, 3), dtype=np.float32)
+        X = np.zeros((0, WINDOW_SIZE, 2), dtype=np.float32)
 
     info = {
         "duration_s": duration_s,
@@ -1036,9 +1035,9 @@ with st.sidebar:
     st.markdown(
         """
         <table class="sb-tbl">
-            <tr><td>ACCURACY</td><td>100.00%</td></tr>
-            <tr><td>PARAMETERS</td><td>≈38k</td></tr>
-            <tr><td>CHANNELS</td><td>3 (I · Q · IQ-ratio)</td></tr>
+            <tr><td>ACCURACY</td><td>98.1% (held-out)</td></tr>
+            <tr><td>PARAMETERS</td><td>≈230k</td></tr>
+            <tr><td>CHANNELS</td><td>2 (I · Q)</td></tr>
             <tr><td>WINDOW</td><td>1024 samples</td></tr>
         </table>
         """,
@@ -1199,8 +1198,8 @@ with tab1:
                             <div class="meta-grid">
                                 <span class="meta-lbl">DEVICE</span><span class="meta-val">CC1101 + ESP32</span>
                                 <span class="meta-lbl">SESSION</span><span class="meta-val">{session_id}</span>
-                                <span class="meta-lbl">MODEL</span><span class="meta-val">v2+features 3ch</span>
-                                <span class="meta-lbl">ACCURACY</span><span class="meta-val">100.00%</span>
+                                <span class="meta-lbl">MODEL</span><span class="meta-val">v5 onset 2ch</span>
+                                <span class="meta-lbl">ACCURACY</span><span class="meta-val">98.1%</span>
                             </div>
                             """,
                             unsafe_allow_html=True,
@@ -1320,7 +1319,7 @@ with tab1:
                             | Individual scores   | {", ".join(f"{p:.3f}" for p in probs)} |
                             | Average score       | {float(np.mean(probs)):.4f} |
                             | Threshold (display) | {thr:.0f}% confidence      |
-                            | Threshold (model)   | 0.50 score                |
+                            | Threshold (model)   | 0.70 score                |
                             """,
                         )
 
@@ -1521,7 +1520,7 @@ with tab2:
 st.markdown(
     """
     <div class="rf-footer">
-        RFFPLA &nbsp;·&nbsp; HKR 2026 &nbsp;·&nbsp; v2+features 3ch &nbsp;·&nbsp; 100.00% HELD-OUT ACCURACY
+        RFFPLA &nbsp;·&nbsp; HKR 2026 &nbsp;·&nbsp; v5 onset 2ch &nbsp;·&nbsp; 98.1% HELD-OUT ACCURACY
     </div>
     """,
     unsafe_allow_html=True,
