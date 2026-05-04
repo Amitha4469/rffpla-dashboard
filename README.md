@@ -5,6 +5,8 @@ Neural Network to identify whether a captured radio signal was
 transmitted by an enrolled authorized device or an unknown rogue 
 device, based on unique hardware-level RF characteristics.
 
+**Live dashboard:** https://rffpla-dashboard.onrender.com — open in your browser, no local setup required
+
 **Project:** Bachelor-level System Engineering — HKR 2026  
 **Jira board:** https://stud-team-vgxqca3c.atlassian.net/jira/software/projects/RFFPLA/boards/100
 
@@ -19,7 +21,7 @@ Transmitter        Receiver          Signal capture       Feature extract    CNN
 | Authorized transmitter | ESP32 + CC1101       | Sends OOK packets at 433.92 MHz               |
 | Receiver               | RTL-SDR V3 dongle    | Captures IQ samples at 2 Msps                 |
 | Signal capture         | GNU Radio Companion  | Saves raw IQ to .c64 binary files             |
-| Preprocessing          | `preprocess.py`      | Burst extraction, normalisation, windowing    |
+| Preprocessing          | `preprocess.py`      | Onset-aligned transient extraction, 2-channel IQ (real + imaginary) |
 | Classifier             | 1D CNN (TFLite)      | Authenticates device from signal fingerprint  |
 | Dashboard              | Render web app       | Real-time authentication UI                   | 
 
@@ -37,7 +39,7 @@ rffpla-dashboard/
 ├── .gitignore
 ├── models/
 │   ├── README.md           # Model file location guide
-│   └── RFFPLA_classifier.tflite  # Trained model (gitignored if >100MB)
+│   └── RFFPLA_classifier_v5_iq2ch.tflite  # Trained model (gitignored if >100MB)
 ├── data/
 │   └── README.md           # Data folder structure guide
 ├── results/
@@ -73,11 +75,10 @@ cd rffpla-dashboard
 pip install -r requirements.txt
 
 # Move model file into models/ folder
-# (download RFFPLA_classifier.tflite from Google Drive — see models/README.md)
-
-# Launch dashboard locally
-streamlit run app.py
+# (download RFFPLA_classifier_v5_iq2ch.tflite from Google Drive — see models/README.md)
 ```
+
+Open https://rffpla-dashboard.onrender.com in your browser — no local setup required.
 
 ### Preprocess new recordings
 
@@ -118,10 +119,13 @@ python preprocess.py --input data/raw/rogue_session1/ --output data/processed/r1
 All parameters are defined in `config.py`:
 
 ```python
-THRESHOLD   = 0.03      # Amplitude threshold for burst detection
-WINDOW_SIZE = 1024      # Samples per burst window
-SAMPLE_RATE = 2e6       # RTL-SDR sample rate (2 Msps)
-CENTER_FREQ = 433.92e6  # Capture frequency (Hz)
+SAMPLE_RATE    = 2_000_000       # RTL-SDR / USRP sample rate (2 MSps)
+CENTER_FREQ    = 433.92e6        # Target RF frequency (Hz)
+WINDOW_SIZE    = 1024            # Samples per CNN input window
+MODEL_PATH     = "models/RFFPLA_classifier_v5_iq2ch.tflite"
+AUTH_THRESHOLD = 0.70            # Score > 0.70 → AUTHORIZED
+SMOOTH         = 16              # Moving average kernel size
+PRE_SAMPLES    = 128             # Samples to include before detected onset
 ```
 
 ---
@@ -129,13 +133,13 @@ CENTER_FREQ = 433.92e6  # Capture frequency (Hz)
 ## Model Performance
 
 | Metric | Value |
-|---|---|
-| Architecture | 1D CNN |
+| --- | --- |
+| Architecture | 1D CNN — 4 conv blocks (64→128→256→256 filters) |
 | Parameters | 44,577 |
-| Test accuracy | 99.69% |
-| Rogue recall | 100.00% |
-| Input shape | (1024, 2) — I and Q channels |
-| Inference runtime | TFLite (ai-edge-litert) |
+| AUTH acceptance | 98.1% / 97.7% on held-out test sessions |
+| ROGUE rejection | 97.7% (held-out test) |
+| Input shape | (1, 1024, 2) — real and imaginary channels |
+| Inference runtime | TFLite (ai-edge-litert) — RFFPLA_classifier_v5_iq2ch.tflite |
 
 ---
 

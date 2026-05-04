@@ -20,14 +20,46 @@ from pathlib import Path
 
 import numpy as np
 
-from config import THRESHOLD, WINDOW_SIZE, SAMPLE_RATE
+from config import (
+    WINDOW_SIZE, SAMPLE_RATE,
+    SMOOTH, PRE_SAMPLES, NOISE_PCT, AMP_MULT, SLOPE_MULT, MIN_ONSET_GAP,
+)
 
-# ── Burst detector constants (implementation detail, not model hyper-params) ──
-_SMOOTH_WIN = 20    # samples in the moving-average amplitude smoother
-_GUARD      = 50    # guard samples prepended/appended around each burst edge
-_MIN_LEN    = 80    # minimum burst length (samples) before windowing
-_MAX_BURSTS      = 20          # cap per file to avoid very long captures dominating
 _MAX_PROC_SAMPLES = 30_000_000  # ~15 s at 2 Msps; hard cap before O(N) convolution
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Onset detector
+# ─────────────────────────────────────────────────────────────────────────────
+
+def moving_average(x, k):
+    return np.convolve(x.astype(np.float32), np.ones(k)/k, mode='same')
+
+
+def detect_onsets(iq):
+    amp = np.abs(iq).astype(np.float32)
+    a = moving_average(amp, SMOOTH)
+    noise_floor = np.percentile(a, NOISE_PCT)
+    active = a > (noise_floor * AMP_MULT)
+    da = np.diff(a, prepend=a[0])
+    slope_floor = np.percentile(np.abs(da), 60)
+    rising = da > (slope_floor * SLOPE_MULT)
+    hits = np.where(active & rising)[0]
+    if len(hits) == 0:
+        return np.array([], dtype=np.int64)
+    keep = [hits[0]]
+    for h in hits[1:]:
+        if h - keep[-1] >= MIN_ONSET_GAP:
+            keep.append(h)
+    return np.array(keep, dtype=np.int64)
+
+
+def power_normalise(chunk):
+    p = np.mean(np.abs(chunk)**2)
+    if not np.isfinite(p) or p <= 1e-12:
+        return None
+    iqn = (chunk / np.sqrt(p + 1e-12)).astype(np.complex64)
+    return np.stack([iqn.real, iqn.imag], axis=-1).astype(np.float32)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +83,7 @@ def extract_bursts(source):
         Complex IQ snapshots (used for plotting).
     info : dict
         burst_count  – number of bursts returned in X
-        dropped      – bursts rejected (too short or below threshold)
+        dropped      – bursts rejected (failed power normalisation)
         sample_count – total IQ samples in the raw capture
         duration_s   – capture duration in seconds
     """
@@ -69,57 +101,43 @@ def extract_bursts(source):
 
     iq = (floats[0::2] + 1j * floats[1::2]).astype(np.complex64)
 
-    # Truncate before O(N) ops — defence-in-depth even when the size guard in
-    # app.py has already capped the upload.
     if len(iq) > _MAX_PROC_SAMPLES:
         iq = iq[:_MAX_PROC_SAMPLES]
 
-    # Replace NaN / Inf that arise from corrupted or non-.c64 files so they
-    # don't propagate silently through amplitude and convolution steps.
     if not np.all(np.isfinite(iq)):
         iq = np.where(np.isfinite(iq), iq, np.complex64(0))
 
     sample_count = len(iq)
     duration_s   = sample_count / SAMPLE_RATE
 
-    # ── Amplitude envelope & burst detection ──────────────────────────────────
-    amp = np.abs(iq)
-    smoothed = np.convolve(amp, np.ones(_SMOOTH_WIN) / _SMOOTH_WIN, mode="same")
-
-    # Rising / falling edges via diff on boolean mask
-    active = np.concatenate([[False], smoothed > THRESHOLD, [False]])
-    edges  = np.diff(active.astype(np.int8))
-    starts = np.where(edges ==  1)[0]
-    ends   = np.where(edges == -1)[0]
+    # ── Onset detection ───────────────────────────────────────────────────────
+    onsets = detect_onsets(iq)
 
     arrays  = []
     bursts  = []
     dropped = 0
 
-    for s, e in zip(starts, ends):
-        if len(arrays) >= _MAX_BURSTS:
-            break
+    for onset in onsets:
+        start = max(0, onset - PRE_SAMPLES)
+        end   = start + WINDOW_SIZE
+        if end > len(iq):
+            end   = len(iq)
+            start = max(0, end - WINDOW_SIZE)
 
-        # Add guard samples around burst edges
-        b = iq[max(0, s - _GUARD): min(len(iq), e + _GUARD)]
+        chunk = iq[start:end]
+        if len(chunk) < WINDOW_SIZE:
+            chunk = np.concatenate([
+                chunk,
+                np.zeros(WINDOW_SIZE - len(chunk), dtype=np.complex64),
+            ])
 
-        if len(b) < _MIN_LEN:
+        window = power_normalise(chunk)
+        if window is None:
             dropped += 1
             continue
 
-        # Normalise to peak amplitude
-        pk = np.max(np.abs(b))
-        if pk > 0:
-            b = b / pk
-
-        # Window to exactly WINDOW_SIZE samples (truncate or zero-pad)
-        if len(b) >= WINDOW_SIZE:
-            b = b[:WINDOW_SIZE]
-        else:
-            b = np.concatenate([b, np.zeros(WINDOW_SIZE - len(b), dtype=np.complex64)])
-
-        arrays.append(np.stack([b.real, b.imag], axis=-1).astype(np.float32))
-        bursts.append(b)
+        arrays.append(window)
+        bursts.append(chunk.astype(np.complex64))
 
     X = np.stack(arrays, axis=0) if arrays else np.empty((0, WINDOW_SIZE, 2), dtype=np.float32)
 
@@ -145,13 +163,12 @@ def _parse_split(s):
     return parts
 
 
-def _stratified_split(X, y, ratios, rng):
-    """Simple random split (single label → no stratification needed)."""
+def _session_split(X, y, ratios, rng):
+    """Session-based random split to prevent data leakage."""
     n      = len(X)
     idx    = rng.permutation(n)
     n_tr   = int(round(ratios[0] * n))
     n_va   = int(round(ratios[1] * n))
-    # Test gets whatever is left so totals always add up exactly
     tr_idx = idx[:n_tr]
     va_idx = idx[n_tr: n_tr + n_va]
     te_idx = idx[n_tr + n_va:]
@@ -190,7 +207,6 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Process each file ─────────────────────────────────────────────────────
     all_arrays  = []
     file_logs   = []
     total_drop  = 0
@@ -220,16 +236,14 @@ def main():
     if not all_arrays:
         sys.exit("Error: No valid bursts extracted from any file.")
 
-    # ── Combine & split ───────────────────────────────────────────────────────
     X_all = np.concatenate(all_arrays, axis=0)
     y_all = np.full(len(X_all), args.label, dtype=np.int32)
 
     rng = np.random.default_rng(args.seed)
-    X_tr, X_va, X_te, y_tr, y_va, y_te = _stratified_split(
+    X_tr, X_va, X_te, y_tr, y_va, y_te = _session_split(
         X_all, y_all, args.split, rng
     )
 
-    # ── Save arrays ───────────────────────────────────────────────────────────
     np.save(output_dir / "train_X.npy", X_tr)
     np.save(output_dir / "val_X.npy",   X_va)
     np.save(output_dir / "test_X.npy",  X_te)
@@ -237,17 +251,17 @@ def main():
     np.save(output_dir / "val_y.npy",   y_va)
     np.save(output_dir / "test_y.npy",  y_te)
 
-    # ── Save JSON log ─────────────────────────────────────────────────────────
     log = {
         "timestamp":    datetime.now(timezone.utc).isoformat(),
         "params": {
-            "threshold":   THRESHOLD,
-            "window_size": WINDOW_SIZE,
-            "sample_rate": SAMPLE_RATE,
-            "smooth_win":  _SMOOTH_WIN,
-            "guard":       _GUARD,
-            "min_len":     _MIN_LEN,
-            "max_bursts":  _MAX_BURSTS,
+            "window_size":   WINDOW_SIZE,
+            "sample_rate":   SAMPLE_RATE,
+            "smooth":        SMOOTH,
+            "pre_samples":   PRE_SAMPLES,
+            "noise_pct":     NOISE_PCT,
+            "amp_mult":      AMP_MULT,
+            "slope_mult":    SLOPE_MULT,
+            "min_onset_gap": MIN_ONSET_GAP,
         },
         "label":         args.label,
         "split_ratios":  args.split,
@@ -267,7 +281,6 @@ def main():
     with open(log_path, "w") as fh:
         json.dump(log, fh, indent=2)
 
-    # ── Print summary ─────────────────────────────────────────────────────────
     print(f"Files processed : {n_processed}")
     print(f"Total bursts    : {len(X_all)}")
     print(f"Dropped bursts  : {total_drop}")
